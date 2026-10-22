@@ -1,6 +1,7 @@
 package org.tool;
 
 import atlantafx.base.theme.PrimerDark;
+import atlantafx.base.theme.PrimerLight;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.application.Platform;
@@ -8,6 +9,7 @@ import javafx.beans.property.SimpleStringProperty;
 import javafx.css.PseudoClass;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.chart.LineChart;
 import javafx.scene.chart.NumberAxis;
@@ -66,6 +68,8 @@ public class Main extends Application {
     private String css;
 
     private Stage stage;
+    private boolean dark = true;
+    private Button themeBtn;
     private Stage compact;
     private TrayIcon tray;
 
@@ -118,7 +122,10 @@ public class Main extends Application {
         compactBtn.setOnAction(e -> showCompact());
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox header = new HBox(logo, bDash, bProc, bAlert, spacer, status, compactBtn);
+        themeBtn = new Button("LIGHT MODE");
+        themeBtn.getStyleClass().add("btn");
+        themeBtn.setOnAction(e -> applyTheme(!dark));
+        HBox header = new HBox(logo, bDash, bProc, bAlert, spacer, status, themeBtn, compactBtn);
         header.getStyleClass().add("header");
         header.setAlignment(Pos.CENTER_LEFT);
         header.setPrefHeight(48);
@@ -237,7 +244,7 @@ public class Main extends Application {
         }
         if (compact.isShowing()) {
             compactBars.get(metric).setProgress(Math.max(v, 0) / 100.0);
-            compactBars.get(metric).setStyle(firing ? "-fx-accent: #ff6b6b;" : "-fx-accent: #33ff66;");
+            compactBars.get(metric).setStyle(firing ? "-fx-accent: -argus-warn;" : "-fx-accent: -argus-fg;");
             compactLabels.get(metric).setText(valueText);
         }
     }
@@ -391,7 +398,7 @@ public class Main extends Application {
                 ButtonType.CANCEL, ButtonType.OK);
         confirm.setTitle("Terminate process?");
         confirm.setHeaderText("TERMINATE PROCESS?");
-        confirm.getDialogPane().getStylesheets().add(css);
+        styleDialog(confirm);
         Optional<ButtonType> answer = confirm.showAndWait();
         if (answer.isEmpty() || answer.get() != ButtonType.OK) return;
 
@@ -597,6 +604,29 @@ public class Main extends Application {
         System.exit(0);
     }
 
+    // ---------------------------------------------------------------- theme
+
+    /** Switches the AtlantaFX base theme and toggles the "light" palette class on every window. */
+    private void applyTheme(boolean darkMode) {
+        dark = darkMode;
+        Application.setUserAgentStylesheet(dark
+                ? new PrimerDark().getUserAgentStylesheet()
+                : new PrimerLight().getUserAgentStylesheet());
+        setLight(stage.getScene().getRoot(), !dark);
+        setLight(compact.getScene().getRoot(), !dark);
+        themeBtn.setText(dark ? "LIGHT MODE" : "DARK MODE");
+    }
+
+    private static void setLight(Parent root, boolean light) {
+        root.getStyleClass().remove("light");
+        if (light) root.getStyleClass().add("light");
+    }
+
+    private void styleDialog(Alert a) {
+        a.getDialogPane().getStylesheets().add(css);
+        if (!dark) a.getDialogPane().getStyleClass().add("light");
+    }
+
     // ---------------------------------------------------------------- small helpers
 
     private static void show(VBox visible, VBox... others) {
@@ -640,7 +670,7 @@ public class Main extends Application {
     private void info(String text, Alert.AlertType type) {
         Alert a = new Alert(type, text, ButtonType.OK);
         a.setHeaderText(null);
-        a.getDialogPane().getStylesheets().add(css);
+        styleDialog(a);
         a.showAndWait();
     }
 

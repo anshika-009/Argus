@@ -17,7 +17,8 @@ Argus watches CPU, memory, disk and battery in real time, shows live graphs, ran
 - **Compact mode:** a small always-on-top widget with live bars for each metric.
 - **Terminate process:** select a process, confirm, and Argus ends it. System-critical processes are protected, and permission errors are reported clearly.
 - **System tray:** closing the window keeps Argus monitoring in the tray.
-- **Battery-safe:** machines without a battery show "N/A" instead of crashing.
+- **Fault-tolerant sensors:** each sensor is read in isolation, so a failing one (for example no battery) shows "N/A" instead of crashing the app.
+- **Stays responsive under load:** the sampler runs at minimum thread priority, and the UI skips stale frames.
 - **Fully offline:** no network access, no accounts, no telemetry.
 
 ## Tech stack
@@ -57,6 +58,7 @@ src/main/
 ├── java/org/tool/
 │   ├── Main.java          UI: dashboard, processes, alerts, compact mode, tray
 │   ├── Sampler.java       OSHI wrapper that builds immutable system snapshots
+│   ├── RingBuffer.java    Fixed-capacity circular buffer for graph history
 │   ├── AlertEngine.java   Breach-duration checks for alert rules
 │   ├── Db.java            SQLite storage for rules and trigger logs
 │   └── Rule.java          Alert rule model
@@ -69,7 +71,7 @@ src/main/
 1. On startup Argus opens its SQLite database (`~/.argus/argus.db`) and loads the saved alert rules.
 2. A background **sampler thread** reads CPU, memory, disk and battery every second and produces an immutable snapshot.
 3. The **alert engine** counts how many seconds in a row each rule has been breached. When the count reaches the rule's duration, the alert fires once: it is logged, shown as a tray notification, and the matching card turns red.
-4. The **UI thread** only renders the latest snapshot into the charts. A fixed-size history of the last 60 samples bounds memory use no matter how long Argus runs.
+4. The sampler publishes each snapshot and appends it to a fixed-capacity **ring buffer** (the last 60 samples per metric), so memory use stays constant however long Argus runs. The **UI thread** renders only the newest snapshot once per frame and never queries the OS; if rendering lags, older frames are skipped.
 5. Every 2 seconds the process list is refreshed. Before terminating, Argus asks for confirmation and refuses protected processes.
 
 ## Data storage
@@ -87,5 +89,3 @@ Alert rules and trigger logs are stored locally in `~/.argus/argus.db` (on Windo
 - Choose which metrics appear in compact mode
 - Persist user settings across restarts
 - Stricter process-termination safety checks (start-time validation, critical-process list)
-- Frame dropping and sensor-level fault isolation under heavy load
-

@@ -1,6 +1,7 @@
 package org.tool;
 
 import atlantafx.base.theme.PrimerDark;
+import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
@@ -38,7 +39,6 @@ import java.awt.PopupMenu;
 import java.awt.SystemTray;
 import java.awt.TrayIcon;
 import java.awt.image.BufferedImage;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -48,6 +48,7 @@ import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /** Argus - lightweight system monitor. Hacker-terminal theme. */
@@ -77,6 +78,15 @@ public class Main extends Application {
     private List<Sampler.Proc> lastProcs = new ArrayList<>();
     private boolean sortByCpu = true;
     private int tickCount = 0;
+
+    // The sampler thread PUBLISHES data here; the UI thread only READS the newest value once per frame.
+    // If the UI falls behind, older frames are simply overwritten and skipped (frame dropping).
+    private record Frame(Sampler.Snapshot s, AlertEngine.Result r) {}
+    private final AtomicReference<Frame> latestFrame = new AtomicReference<>();
+    private final AtomicReference<List<Sampler.Proc>> latestProcs = new AtomicReference<>();
+    private final Map<String, RingBuffer> histories = new LinkedHashMap<>();   // fixed-size graph history
+    private Frame shownFrame;
+    private List<Sampler.Proc> shownProcs;
 
     // ---------------------------------------------------------------- start
 
@@ -147,6 +157,8 @@ public class Main extends Application {
         refreshRules();
         refreshLogs();
 
+        for (String m : METRICS) histories.put(m, new RingBuffer(HISTORY));
+
         exec = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "argus-sampler");
             t.setDaemon(true);
@@ -154,6 +166,24 @@ public class Main extends Application {
             return t;
         });
         exec.scheduleAtFixedRate(this::tick, 0, 1, TimeUnit.SECONDS);
+
+        // Runs once per rendered frame on the JavaFX thread; draws only the newest published data.
+        new AnimationTimer() {
+            @Override
+            public void handle(long now) {
+                Frame f = latestFrame.get();
+                if (f != null && f != shownFrame) {
+                    shownFrame = f;
+                    render(f);
+                }
+                List<Sampler.Proc> p = latestProcs.get();
+                if (p != null && p != shownProcs) {
+                    shownProcs = p;
+                    lastProcs = p;
+                    if (stage.isShowing()) refreshProcTable();
+                }
+            }
+        }.start();
     }
 
     // ---------------------------------------------------------------- sampling loop (background thread)
@@ -162,44 +192,53 @@ public class Main extends Application {
         try {                                   // an exception would silently cancel the schedule
             Sampler.Snapshot s = sampler.sample();
             AlertEngine.Result r = engine.evaluate(s);
-            for (String msg : r.fired()) {
-                db.addLog(msg);
-                if (tray != null) tray.displayMessage("Argus alert", msg, TrayIcon.MessageType.WARNING);
+
+            histories.get("CPU").add(Math.max(s.cpu(), 0));
+            histories.get("MEMORY").add(Math.max(s.mem(), 0));
+            histories.get("DISK").add(Math.max(s.disk(), 0));
+            histories.get("BATTERY").add(Math.max(s.battery(), 0));
+            latestFrame.set(new Frame(s, r));   // publish; the UI picks up the newest frame
+
+            if (!r.fired().isEmpty()) {
+                for (String msg : r.fired()) {
+                    db.addLog(msg);
+                    if (tray != null) tray.displayMessage("Argus alert", msg, TrayIcon.MessageType.WARNING);
+                }
+                Platform.runLater(this::refreshLogs);
             }
-            List<Sampler.Proc> procs = null;
             if (tickCount++ % 2 == 0) {
                 try {
-                    procs = sampler.processes();
+                    latestProcs.set(sampler.processes());
                 } catch (Exception e) {
                     e.printStackTrace();          // a process-read failure must not stop the metrics
                 }
             }
-            final List<Sampler.Proc> procsFinal = procs;
-            Platform.runLater(() -> apply(s, r, procsFinal));
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    private void apply(Sampler.Snapshot s, AlertEngine.Result r, List<Sampler.Proc> procs) {
+    /** JavaFX thread: draw one published frame. */
+    private void render(Frame f) {
+        Sampler.Snapshot s = f.s();
+        AlertEngine.Result r = f.r();
         update("CPU", s.cpu(), pct(s.cpu()),
                 s.cpu() < 0 ? "N/A" : r.firing().contains("CPU") ? "\u26A0 ALERT: limit exceeded" : "normal", r);
         update("MEMORY", s.mem(), pct(s.mem()), s.memText(), r);
         update("DISK", s.disk(), pct(s.disk()), s.diskText(), r);
         update("BATTERY", s.battery(), pct(s.battery()), s.batText(), r);
-        if (procs != null) {
-            lastProcs = procs;
-            refreshProcTable();
-        }
-        if (!r.fired().isEmpty()) refreshLogs();
     }
 
     private void update(String metric, double v, String valueText, String subText, AlertEngine.Result r) {
         boolean firing = r.firing().contains(metric);
-        cards.get(metric).push(v, valueText, subText, firing);
-        compactBars.get(metric).setProgress(Math.max(v, 0) / 100.0);
-        compactBars.get(metric).setStyle(firing ? "-fx-accent: #ff6b6b;" : "-fx-accent: #33ff66;");
-        compactLabels.get(metric).setText(valueText);
+        if (stage.isShowing()) {                // no point redrawing charts nobody can see
+            cards.get(metric).draw(histories.get(metric).toArray(), valueText, subText, firing);
+        }
+        if (compact.isShowing()) {
+            compactBars.get(metric).setProgress(Math.max(v, 0) / 100.0);
+            compactBars.get(metric).setStyle(firing ? "-fx-accent: #ff6b6b;" : "-fx-accent: #33ff66;");
+            compactLabels.get(metric).setText(valueText);
+        }
     }
 
     private static String pct(double v) {
@@ -212,7 +251,6 @@ public class Main extends Application {
     private final class MetricCard {
         final Label value = new Label("--");
         final Label sub = new Label(" ");
-        final ArrayDeque<Double> history = new ArrayDeque<>();
         final XYChart.Series<Number, Number> series = new XYChart.Series<>();
         final VBox box;
 
@@ -245,12 +283,10 @@ public class Main extends Application {
             box.getStyleClass().add("card");
         }
 
-        void push(double v, String valueText, String subText, boolean firing) {
-            if (history.size() == HISTORY) history.removeFirst();
-            history.addLast(Math.max(v, 0));
-            List<XYChart.Data<Number, Number>> pts = new ArrayList<>();
-            int i = 0;
-            for (double d : history) pts.add(new XYChart.Data<Number, Number>(i++, d));
+        /** data = ring-buffer contents, oldest first. */
+        void draw(double[] data, String valueText, String subText, boolean firing) {
+            List<XYChart.Data<Number, Number>> pts = new ArrayList<>(data.length);
+            for (int i = 0; i < data.length; i++) pts.add(new XYChart.Data<Number, Number>(i, data[i]));
             series.getData().setAll(pts);
             value.setText(valueText);
             sub.setText(subText);

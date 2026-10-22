@@ -150,6 +150,7 @@ public class Main extends Application {
         exec = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "argus-sampler");
             t.setDaemon(true);
+            t.setPriority(Thread.MIN_PRIORITY);   // never compete with the UI under heavy load
             return t;
         });
         exec.scheduleAtFixedRate(this::tick, 0, 1, TimeUnit.SECONDS);
@@ -165,18 +166,27 @@ public class Main extends Application {
                 db.addLog(msg);
                 if (tray != null) tray.displayMessage("Argus alert", msg, TrayIcon.MessageType.WARNING);
             }
-            List<Sampler.Proc> procs = (tickCount++ % 2 == 0) ? sampler.processes() : null;
-            Platform.runLater(() -> apply(s, r, procs));
+            List<Sampler.Proc> procs = null;
+            if (tickCount++ % 2 == 0) {
+                try {
+                    procs = sampler.processes();
+                } catch (Exception e) {
+                    e.printStackTrace();          // a process-read failure must not stop the metrics
+                }
+            }
+            final List<Sampler.Proc> procsFinal = procs;
+            Platform.runLater(() -> apply(s, r, procsFinal));
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
     private void apply(Sampler.Snapshot s, AlertEngine.Result r, List<Sampler.Proc> procs) {
-        update("CPU", s.cpu(), pct(s.cpu()), r.firing().contains("CPU") ? "\u26A0 ALERT: limit exceeded" : "normal", r);
+        update("CPU", s.cpu(), pct(s.cpu()),
+                s.cpu() < 0 ? "N/A" : r.firing().contains("CPU") ? "\u26A0 ALERT: limit exceeded" : "normal", r);
         update("MEMORY", s.mem(), pct(s.mem()), s.memText(), r);
         update("DISK", s.disk(), pct(s.disk()), s.diskText(), r);
-        update("BATTERY", s.battery(), s.battery() < 0 ? "N/A" : pct(s.battery()), s.batText(), r);
+        update("BATTERY", s.battery(), pct(s.battery()), s.batText(), r);
         if (procs != null) {
             lastProcs = procs;
             refreshProcTable();
@@ -193,7 +203,7 @@ public class Main extends Application {
     }
 
     private static String pct(double v) {
-        return String.format("%.0f%%", v);
+        return v < 0 ? "N/A" : String.format("%.0f%%", v);
     }
 
     // ---------------------------------------------------------------- dashboard

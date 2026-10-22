@@ -1,0 +1,42 @@
+.root { -fx-background-color: #0a0f0a; -fx-font-family: "Consolas", monospace; -fx-font-size: 13px; }
+.label { -fx-text-fill: #33ff66; }
+.dim { -fx-text-fill: #6fbf86; }
+.logo { -fx-font-size: 16px; -fx-font-weight: bold; }
+.warn-text { -fx-text-fill: #ff6b6b; }
+
+.header { -fx-border-color: transparent transparent #1d3a25 transparent; -fx-padding: 0 20 0 20; -fx-spacing: 22; }
+.nav { -fx-background-color: transparent; -fx-background-radius: 0; -fx-text-fill: #6fbf86;
+    -fx-border-color: transparent transparent transparent transparent; -fx-border-width: 0 0 2 0; -fx-padding: 14 0 12 0; -fx-cursor: hand; }
+.nav:selected { -fx-text-fill: #33ff66; -fx-border-color: transparent transparent #33ff66 transparent; }
+
+.card { -fx-background-color: #0f1a12; -fx-border-color: #1d3a25; -fx-padding: 14; -fx-spacing: 6; }
+.card:warn { -fx-border-color: #ff6b6b; }
+.card-name { -fx-text-fill: #6fbf86; }
+.big { -fx-font-size: 26px; -fx-font-weight: bold; }
+.card:warn .big, .card:warn .sub { -fx-text-fill: #ff6b6b; }
+
+.chart { -fx-background-color: transparent; }
+.chart-plot-background { -fx-background-color: transparent; }
+.chart-series-line { -fx-stroke: #33ff66; -fx-stroke-width: 2px; }
+.card:warn .chart-series-line { -fx-stroke: #ff6b6b; }
+.axis { -fx-tick-label-fill: transparent; -fx-border-color: transparent; }
+
+.btn { -fx-background-color: transparent; -fx-border-color: #33ff66; -fx-text-fill: #33ff66; -fx-background-radius: 0; -fx-border-radius: 0; -fx-cursor: hand; }
+.btn:hover { -fx-background-color: #11331a; }
+.btn-danger { -fx-border-color: #ff6b6b; -fx-text-fill: #ff6b6b; }
+.btn-danger:hover { -fx-background-color: #3a1515; }
+.toggle-button.btn:selected { -fx-background-color: #11331a; }
+
+.table-view { -fx-background-color: #0f1a12; -fx-control-inner-background: #0f1a12; -fx-control-inner-background-alt: #0f1a12;
+    -fx-table-cell-border-color: #16281b; -fx-border-color: #1d3a25; }
+.table-view .column-header-background, .table-view .column-header, .table-view .filler { -fx-background-color: #0f1a12; }
+.table-view .column-header .label { -fx-text-fill: #6fbf86; }
+.table-row-cell { -fx-background-color: transparent; }
+.table-row-cell:selected { -fx-background-color: #11331a; }
+.table-cell { -fx-text-fill: #33ff66; }
+
+.list-view { -fx-background-color: #0f1a12; -fx-control-inner-background: #0f1a12; -fx-border-color: #1d3a25; }
+.list-cell { -fx-background-color: transparent; -fx-text-fill: #6fbf86; }
+.section { -fx-font-weight: bold; }
+.progress-bar > .track { -fx-background-color: #16281b; }
+.progress-bar > .bar { -fx-background-color: -fx-accent; -fx-background-radius: 0; }

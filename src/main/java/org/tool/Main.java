@@ -48,6 +48,7 @@ import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -377,10 +378,14 @@ public class Main extends Application {
             info("Select a process first.", Alert.AlertType.INFORMATION);
             return;
         }
-        if (p.pid() <= 4 || p.pid() == ProcessHandle.current().pid()) {
-            info("This process is protected and cannot be terminated.", Alert.AlertType.WARNING);
+
+        // Safety checks BEFORE asking: protected / unreadable / recycled-PID processes never reach the dialog.
+        ProcessGuard.Verdict first = ProcessGuard.check(p);
+        if (!first.allowed()) {
+            info(first.reason(), Alert.AlertType.WARNING);
             return;
         }
+
         Alert confirm = new Alert(Alert.AlertType.CONFIRMATION,
                 p.name() + " (PID " + p.pid() + ")\nUnsaved data in this app will be lost.",
                 ButtonType.CANCEL, ButtonType.OK);
@@ -390,24 +395,40 @@ public class Main extends Application {
         Optional<ButtonType> answer = confirm.showAndWait();
         if (answer.isEmpty() || answer.get() != ButtonType.OK) return;
 
-        Optional<ProcessHandle> handle = ProcessHandle.of(p.pid());
-        if (handle.isEmpty()) {
-            info("That process has already exited.", Alert.AlertType.INFORMATION);
+        // Re-check: the process may have exited (and its PID been reused) while the dialog was open.
+        ProcessGuard.Verdict verdict = ProcessGuard.check(p);
+        if (!verdict.allowed()) {
+            info(verdict.reason(), Alert.AlertType.WARNING);
             return;
         }
-        boolean ok;
-        try {
-            ok = handle.get().destroy();
-        } catch (RuntimeException ex) {
-            ok = false;
-        }
-        if (ok) {
-            db.addLog("Terminated " + p.name() + " (PID " + p.pid() + ")");
-            refreshLogs();
-        } else {
-            info("Could not terminate " + p.name() + ".\nAccess denied - try running Argus as administrator.",
-                    Alert.AlertType.ERROR);
-        }
+        ProcessHandle handle = verdict.handle();
+
+        // Kill and wait on a background thread so the UI never freezes.
+        Thread worker = new Thread(() -> {
+            String error = null;
+            try {
+                if (!handle.destroy()) {
+                    error = "Windows refused to terminate " + p.name() + " (access denied).\nTry running Argus as administrator.";
+                } else {
+                    handle.onExit().get(3, TimeUnit.SECONDS);
+                }
+            } catch (TimeoutException e) {
+                error = p.name() + " did not exit within 3 seconds.";
+            } catch (Exception e) {
+                error = "Could not terminate " + p.name() + ": " + e.getMessage();
+            }
+            final String failure = error;
+            Platform.runLater(() -> {
+                if (failure == null) {
+                    db.addLog("Terminated " + p.name() + " (PID " + p.pid() + ")");
+                    refreshLogs();
+                } else {
+                    info(failure, Alert.AlertType.ERROR);
+                }
+            });
+        }, "argus-terminate");
+        worker.setDaemon(true);
+        worker.start();
     }
 
     // ---------------------------------------------------------------- alerts

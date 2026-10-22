@@ -16,14 +16,15 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Reads system metrics through OSHI and native Windows API. Call only from ONE thread (it keeps previous-tick state). */
+/** Reads system metrics through OSHI. Call only from ONE thread (it keeps previous-tick state). */
 public class Sampler {
 
     /** battery is -1 when the machine has no battery. */
     public record Snapshot(double cpu, double mem, double disk, double battery,
                            String memText, String diskText, String batText) {}
 
-    public record Proc(int pid, String name, double cpu, long memBytes) {}
+    /** startMillis = process creation time (epoch ms); used to detect recycled PIDs. */
+    public record Proc(int pid, String name, double cpu, long memBytes, long startMillis) {}
 
     private final SystemInfo si = new SystemInfo();
     private final CentralProcessor cpu = si.getHardware().getProcessor();
@@ -93,50 +94,44 @@ public class Sampler {
         return new Snapshot(c, m, d, bat, memText, diskText, batText);
     }
 
+
     private static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase().startsWith("windows");
 
-    // --- Native Windows API Bindings (Self-Contained) ---
-    public static class SYSTEM_POWER_STATUS extends Structure {
+    /** Windows SYSTEM_POWER_STATUS structure (declared here so we don't depend on a specific JNA release). */
+    @Structure.FieldOrder({"ACLineStatus", "BatteryFlag", "BatteryLifePercent", "SystemStatusFlag",
+            "BatteryLifeTime", "BatteryFullLifeTime"})
+    public static class PowerStatus extends Structure {
         public byte ACLineStatus;
         public byte BatteryFlag;
         public byte BatteryLifePercent;
-        public byte Reserved1;
+        public byte SystemStatusFlag;
         public int BatteryLifeTime;
         public int BatteryFullLifeTime;
-
-        @Override
-        protected List<String> getFieldOrder() {
-            return List.of("ACLineStatus", "BatteryFlag", "BatteryLifePercent", "Reserved1", "BatteryLifeTime", "BatteryFullLifeTime");
-        }
     }
 
-    public interface NativeKernel32 extends StdCallLibrary {
-        NativeKernel32 INSTANCE = Native.load("kernel32", NativeKernel32.class);
-        boolean GetSystemPowerStatus(SYSTEM_POWER_STATUS result);
+    private interface PowerApi extends StdCallLibrary {
+        PowerApi INSTANCE = Native.load("kernel32", PowerApi.class);
+
+        boolean GetSystemPowerStatus(PowerStatus out);
     }
 
-    /** Windows: query Kernel32.GetSystemPowerStatus directly for accurate readings. */
+    /** Windows: ask the OS directly (same source as the taskbar icon). Returns {percent, text} or null if no battery. */
     private static String[] windowsBattery() {
-        try {
-            SYSTEM_POWER_STATUS st = new SYSTEM_POWER_STATUS();
-            if (!NativeKernel32.INSTANCE.GetSystemPowerStatus(st)) return null;
-            int pct = st.BatteryLifePercent & 0xFF;
-            boolean noBattery = (st.BatteryFlag & 128) != 0;
-            if (noBattery || pct > 100) return null; // 255 = unknown
-
-            String text;
-            if (st.ACLineStatus == 1) {
-                text = (st.BatteryFlag & 8) != 0 ? "charging" : "plugged in";
-            } else {
-                text = "on battery";
-                if (st.BatteryLifeTime > 0 && st.BatteryLifeTime != -1) {
-                    text += String.format(" · %dh %02dm left", st.BatteryLifeTime / 3600, (st.BatteryLifeTime % 3600) / 60);
-                }
+        PowerStatus st = new PowerStatus();
+        if (!PowerApi.INSTANCE.GetSystemPowerStatus(st)) return null;
+        int pct = st.BatteryLifePercent & 0xFF;
+        boolean noBattery = (st.BatteryFlag & 128) != 0;
+        if (noBattery || pct > 100) return null;           // 255 = unknown
+        String text;
+        if (st.ACLineStatus == 1) {
+            text = (st.BatteryFlag & 8) != 0 ? "charging" : "plugged in";
+        } else {
+            text = "on battery";
+            if (st.BatteryLifeTime > 0) {
+                text += String.format(" \u00b7 %dh %02dm left", st.BatteryLifeTime / 3600, (st.BatteryLifeTime % 3600) / 60);
             }
-            return new String[]{String.valueOf(pct), text};
-        } catch (Throwable e) {
-            return null;
         }
+        return new String[]{String.valueOf(pct), text};
     }
 
     /** Other operating systems: fall back to OSHI. */
@@ -150,7 +145,7 @@ public class Sampler {
         if (!p.isCharging()) {
             text = "on battery";
             long secs = (long) p.getTimeRemainingEstimated();
-            if (secs > 0) text += String.format(" · %dh %02dm left", secs / 3600, (secs / 60) % 60);
+            if (secs > 0) text += String.format(" \u00b7 %dh %02dm left", secs / 3600, (secs % 3600) / 60);
         }
         return new String[]{String.valueOf(pct), text};
     }
@@ -173,7 +168,7 @@ public class Sampler {
             current.put(p.getProcessID(), p);
             OSProcess prev = prevProcs.get(p.getProcessID());
             double load = prev == null ? 0 : p.getProcessCpuLoadBetweenTicks(prev) * 100 / cores;
-            out.add(new Proc(p.getProcessID(), p.getName(), load, p.getResidentSetSize()));
+            out.add(new Proc(p.getProcessID(), p.getName(), load, p.getResidentSetSize(), p.getStartTime()));
         }
         prevProcs = current;
         return out;

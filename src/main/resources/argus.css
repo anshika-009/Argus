@@ -62,6 +62,7 @@
 .list-view { -fx-background-color: -argus-panel; -fx-control-inner-background: -argus-panel; -fx-border-color: -argus-border; }
 .list-cell { -fx-background-color: transparent; -fx-text-fill: -argus-dim; }
 .section { -fx-font-weight: bold; }
+.check-box { -fx-text-fill: -argus-fg; }
 .progress-bar > .track { -fx-background-color: -argus-row; }
 .progress-bar > .bar { -fx-background-color: -fx-accent; -fx-background-radius: 0; }
 

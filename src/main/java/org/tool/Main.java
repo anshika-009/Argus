@@ -16,6 +16,7 @@ import javafx.scene.chart.NumberAxis;
 import javafx.scene.chart.XYChart;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
@@ -42,11 +43,14 @@ import java.awt.SystemTray;
 import java.awt.TrayIcon;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -69,6 +73,9 @@ public class Main extends Application {
 
     private Stage stage;
     private boolean dark = true;
+    private VBox compactRows;
+    private final Map<String, HBox> compactRowNodes = new LinkedHashMap<>();
+    private final Set<String> compactMetrics = new HashSet<>();   // which metrics the compact widget shows
     private Button themeBtn;
     private Stage compact;
     private TrayIcon tray;
@@ -104,18 +111,20 @@ public class Main extends Application {
 
         db = new Db();
         engine.setRules(db.rules());
+        loadCompactMetrics();
 
         // ---- header with navigation
         ToggleGroup nav = new ToggleGroup();
         ToggleButton bDash = navButton("DASHBOARD", nav);
         ToggleButton bProc = navButton("PROCESSES", nav);
         ToggleButton bAlert = navButton("ALERTS", nav);
+        ToggleButton bSet = navButton("SETTINGS", nav);
         bDash.setSelected(true);
         keepOneSelected(nav);
 
         Label logo = new Label("\u25C9 ARGUS");
         logo.getStyleClass().add("logo");
-        Label status = new Label("\u25CF MONITORING \u00b7 1s");
+        Label status = new Label("\u25CF LIVE \u00b7 1s");
         status.getStyleClass().add("dim");
         Button compactBtn = new Button("COMPACT");
         compactBtn.getStyleClass().add("btn");
@@ -124,8 +133,8 @@ public class Main extends Application {
         HBox.setHgrow(spacer, Priority.ALWAYS);
         themeBtn = new Button("LIGHT MODE");
         themeBtn.getStyleClass().add("btn");
-        themeBtn.setOnAction(e -> applyTheme(!dark));
-        HBox header = new HBox(logo, bDash, bProc, bAlert, spacer, status, themeBtn, compactBtn);
+        themeBtn.setOnAction(e -> applyTheme(!dark, true));
+        HBox header = new HBox(logo, bDash, bProc, bAlert, bSet, spacer, status, themeBtn, compactBtn);
         header.getStyleClass().add("header");
         header.setAlignment(Pos.CENTER_LEFT);
         header.setPrefHeight(48);
@@ -134,12 +143,15 @@ public class Main extends Application {
         VBox dashboard = buildDashboard();
         VBox processes = buildProcesses();
         VBox alerts = buildAlerts();
-        StackPane content = new StackPane(dashboard, processes, alerts);
+        VBox settings = buildSettings();
+        StackPane content = new StackPane(dashboard, processes, alerts, settings);
         processes.setVisible(false);
         alerts.setVisible(false);
-        bDash.setOnAction(e -> show(dashboard, processes, alerts));
-        bProc.setOnAction(e -> show(processes, dashboard, alerts));
-        bAlert.setOnAction(e -> show(alerts, dashboard, processes));
+        settings.setVisible(false);
+        bDash.setOnAction(e -> show(dashboard, processes, alerts, settings));
+        bProc.setOnAction(e -> show(processes, dashboard, alerts, settings));
+        bAlert.setOnAction(e -> show(alerts, dashboard, processes, settings));
+        bSet.setOnAction(e -> show(settings, dashboard, processes, alerts));
 
         VBox rootBox = new VBox(header, content);
         VBox.setVgrow(content, Priority.ALWAYS);
@@ -148,10 +160,11 @@ public class Main extends Application {
         scene.getStylesheets().add(css);
         stage.setTitle("Argus");
         stage.setScene(scene);
-        stage.setMinWidth(760);
+        stage.setMinWidth(900);
         stage.setMinHeight(520);
 
         buildCompact();
+        applyTheme(!"light".equals(db.getSetting("theme", "dark")), false);   // restore saved theme
         setupTray();
         stage.setOnCloseRequest(e -> {
             if (tray != null) {          // keep monitoring from the tray
@@ -533,7 +546,8 @@ public class Main extends Application {
         expand.setOnAction(e -> showMain());
         Region sp = new Region();
         HBox.setHgrow(sp, Priority.ALWAYS);
-        box.getChildren().add(new HBox(title, sp, expand));
+        compactRows = new VBox(10);
+        box.getChildren().addAll(new HBox(title, sp, expand), compactRows);
         for (String m : METRICS) {
             Label name = new Label(m.substring(0, Math.min(4, m.length())));
             name.setPrefWidth(48);
@@ -546,7 +560,7 @@ public class Main extends Application {
             compactLabels.put(m, val);
             HBox row = new HBox(8, name, bar, val);
             row.setAlignment(Pos.CENTER_LEFT);
-            box.getChildren().add(row);
+            compactRowNodes.put(m, row);
         }
         compact = new Stage();
         compact.setTitle("Argus");
@@ -559,6 +573,70 @@ public class Main extends Application {
             e.consume();
             showMain();
         });
+        applyCompactSelection();
+    }
+
+    /** Shows only the chosen metrics, always in the same order. */
+    private void applyCompactSelection() {
+        compactRows.getChildren().clear();
+        for (String m : METRICS) {
+            if (compactMetrics.contains(m)) compactRows.getChildren().add(compactRowNodes.get(m));
+        }
+        if (compact.isShowing()) compact.sizeToScene();
+    }
+
+    private void loadCompactMetrics() {
+        String saved = db.getSetting("compact.metrics", String.join(",", METRICS));
+        for (String m : saved.split(",")) {
+            String t = m.trim();
+            if (Arrays.asList(METRICS).contains(t)) compactMetrics.add(t);
+        }
+        if (compactMetrics.isEmpty()) compactMetrics.addAll(Arrays.asList(METRICS));
+    }
+
+    private void saveCompactMetrics() {
+        List<String> chosen = new ArrayList<>();
+        for (String m : METRICS) {
+            if (compactMetrics.contains(m)) chosen.add(m);
+        }
+        db.setSetting("compact.metrics", String.join(",", chosen));
+    }
+
+    // ---------------------------------------------------------------- settings page
+
+    private VBox buildSettings() {
+        Label title = new Label("COMPACT MODE");
+        title.getStyleClass().add("section");
+        Label hint = new Label("Choose which metrics the small always-on-top widget shows.");
+        hint.getStyleClass().add("dim");
+
+        VBox boxes = new VBox(10);
+        for (String m : METRICS) {
+            CheckBox cb = new CheckBox(m);
+            cb.setSelected(compactMetrics.contains(m));
+            cb.setOnAction(e -> {
+                if (cb.isSelected()) {
+                    compactMetrics.add(m);
+                } else {
+                    compactMetrics.remove(m);
+                }
+                if (compactMetrics.isEmpty()) {                    // the widget needs at least one row
+                    compactMetrics.add(m);
+                    cb.setSelected(true);
+                    info("Compact mode needs at least one metric.", Alert.AlertType.WARNING);
+                    return;
+                }
+                saveCompactMetrics();
+                applyCompactSelection();
+            });
+            boxes.getChildren().add(cb);
+        }
+        Label note = new Label("Your choices and theme are saved automatically and restored on the next start.");
+        note.getStyleClass().add("dim");
+
+        VBox page = new VBox(14, title, hint, boxes, note);
+        page.setPadding(new Insets(20));
+        return page;
     }
 
     private void showCompact() {
@@ -607,7 +685,7 @@ public class Main extends Application {
     // ---------------------------------------------------------------- theme
 
     /** Switches the AtlantaFX base theme and toggles the "light" palette class on every window. */
-    private void applyTheme(boolean darkMode) {
+    private void applyTheme(boolean darkMode, boolean save) {
         dark = darkMode;
         Application.setUserAgentStylesheet(dark
                 ? new PrimerDark().getUserAgentStylesheet()
@@ -615,6 +693,7 @@ public class Main extends Application {
         setLight(stage.getScene().getRoot(), !dark);
         setLight(compact.getScene().getRoot(), !dark);
         themeBtn.setText(dark ? "LIGHT MODE" : "DARK MODE");
+        if (save) db.setSetting("theme", dark ? "dark" : "light");
     }
 
     private static void setLight(Parent root, boolean light) {

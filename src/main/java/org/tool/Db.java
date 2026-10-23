@@ -30,6 +30,7 @@ public class Db {
             s.execute("CREATE TABLE IF NOT EXISTS rules(id INTEGER PRIMARY KEY AUTOINCREMENT, "
                     + "metric TEXT, op TEXT, threshold REAL, seconds INTEGER, enabled INTEGER)");
             s.execute("CREATE TABLE IF NOT EXISTS logs(id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, message TEXT)");
+            s.execute("CREATE TABLE IF NOT EXISTS settings(name TEXT PRIMARY KEY, val TEXT)");
             ResultSet rs = s.executeQuery("SELECT COUNT(*) FROM rules");
             rs.next();
             if (rs.getInt(1) == 0) {
@@ -82,6 +83,23 @@ public class Db {
             e.printStackTrace();
         }
         return out;
+    }
+
+    /** Reads a saved setting, or `fallback` if it was never saved. */
+    public String getSetting(String name, String fallback) {
+        try (Connection c = DriverManager.getConnection(url);
+             PreparedStatement ps = c.prepareStatement("SELECT val FROM settings WHERE name=?")) {
+            ps.setString(1, name);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) return rs.getString(1);
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return fallback;
+    }
+
+    public void setSetting(String name, String value) {
+        run("INSERT OR REPLACE INTO settings(name,val) VALUES (?,?)", name, value);
     }
 
     private void run(String sql, Object... args) {

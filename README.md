@@ -14,9 +14,10 @@ Argus watches CPU, memory, disk and battery in real time, shows live graphs, ran
 - **Warning indicators:** a card turns red when a value stays beyond your limit.
 - **Rogue process list:** top processes ranked by CPU or memory, refreshed every 2 seconds.
 - **Custom alerts:** set your own thresholds and durations. Alerts fire only after the limit has been breached continuously, so brief spikes don't cause spam. Triggers appear as desktop notifications and are saved to a log.
-- **Compact mode:** a small always-on-top widget with live bars for each metric.
+- **Compact mode:** a small always-on-top widget with live bars. Choose which metrics it shows in the Settings tab.
 - **Safe process termination:** Argus asks for confirmation, then re-checks the process before ending it. It refuses Argus itself, critical Windows processes, system-account services and processes it has no permission to inspect, and it verifies the process start time so a recycled PID is never killed by mistake.
 - **Light and dark themes:** switch with one click; warning colors stay readable in both.
+- **Remembers your settings:** theme and compact-mode choices are saved and restored on the next start.
 - **System tray:** closing the window keeps Argus monitoring in the tray.
 - **Fault-tolerant sensors:** each sensor is read in isolation, so a failing one (for example no battery) shows "N/A" instead of crashing the app.
 - **Stays responsive under load:** the sampler runs at minimum thread priority, and the UI skips stale frames.
@@ -61,7 +62,7 @@ src/main/
 │   ├── Sampler.java       OSHI wrapper that builds immutable system snapshots
 │   ├── RingBuffer.java    Fixed-capacity circular buffer for graph history
 │   ├── AlertEngine.java   Breach-duration checks for alert rules
-│   ├── Db.java            SQLite storage for rules and trigger logs
+│   ├── Db.java            SQLite storage for rules, logs and settings
 │   ├── ProcessGuard.java  Safety checks run before terminating a process
 │   └── Rule.java          Alert rule model
 └── resources/
@@ -78,14 +79,9 @@ src/main/
 
 ## Data storage
 
-Alert rules and trigger logs are stored locally in `~/.argus/argus.db` (on Windows: `C:\Users\<you>\.argus\argus.db`). Delete this file to reset Argus to its default rules.
+Alert rules, trigger logs and settings are stored locally in `~/.argus/argus.db` (on Windows: `C:\Users\<you>\.argus\argus.db`). Delete this file to reset Argus to its default rules.
 
 ## Known limitations
 
 - Terminating some processes needs administrator rights. Run Argus as administrator if you see an "access denied" message.
 - Desktop PCs usually have no battery sensor, so the battery card shows "N/A" there.
-
-## Roadmap
-
-- Choose which metrics appear in compact mode
-- Persist user settings across restarts

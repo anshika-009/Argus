@@ -60,11 +60,9 @@
 .header { -fx-padding: 0 24 0 0; -fx-alignment: center-left;
     -fx-border-color: transparent transparent -argus-rule transparent; -fx-border-width: 0 0 2 0; }
 .root.night .header { -fx-border-width: 0 0 1 0; }
-.logo-word { -fx-font-family: "Segoe UI"; -fx-font-size: 32px; -fx-font-weight: bold; -fx-text-fill: -argus-text; }
-.logo-dot { -fx-font-family: "Segoe UI"; -fx-font-size: 32px; -fx-font-weight: bold; -fx-text-fill: -argus-red; }
-.logo-small .logo-word, .logo-small .logo-dot { -fx-font-size: 18px; }
-.logo-text { -fx-text-fill: -argus-text; }
-.logo-dot-text { -fx-text-fill: -argus-red; }
+.logo-text { -fx-fill: -argus-text; -fx-stroke: transparent; }
+.logo-fake-bold { -fx-stroke: -argus-text; -fx-stroke-width: 1.6px; -fx-stroke-line-join: round; }
+.logo-dot-shape { -fx-fill: -argus-red; }
 .vrule { -fx-background-color: -argus-rule; }
 .tagline { -fx-text-fill: -argus-dim; -fx-padding: 0 24 0 24; }
 

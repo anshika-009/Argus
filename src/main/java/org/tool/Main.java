@@ -38,6 +38,9 @@ import javafx.scene.image.Image;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Font;
+import javafx.scene.text.FontWeight;
+import javafx.scene.text.Text;
+import javafx.scene.shape.Circle;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
@@ -1116,23 +1119,29 @@ public class Main extends Application {
         }
     }
 
-    /** "Argus" in the grotesque logo face with a red full stop. Falls back to Segoe UI Bold if the font file is missing. */
+    /**
+     * "Argus" in the grotesque logo face with a round red full stop.
+     * If the bundled font loads as a light weight (e.g. the variable font), the letters are thickened with a
+     * matching outline so the logo is bold either way. Without the font file it falls back to Segoe UI Bold.
+     */
     private static HBox buildLogo(boolean small) {
-        Label word = new Label("Argus");
-        Label dot = new Label(".");
-        Font f = logoFont(small ? 20 : 32);
-        if (f != null) {
-            word.setFont(f);
-            dot.setFont(f);
-            word.getStyleClass().add("logo-text");
-            dot.getStyleClass().add("logo-dot-text");
+        double size = small ? 20 : 34;
+        Font f = logoFont(size);
+        boolean fakeBold = false;
+        if (f == null) {
+            f = Font.font("Segoe UI", FontWeight.BOLD, size);
         } else {
-            word.getStyleClass().add("logo-word");
-            dot.getStyleClass().add("logo-dot");
+            String face = (f.getName() + " " + f.getStyle()).toLowerCase();
+            fakeBold = !(face.contains("bold") || face.contains("black") || face.contains("heavy"));
         }
-        HBox logo = new HBox(0, word, dot);
+        Text word = new Text("Argus");
+        word.setFont(f);
+        word.getStyleClass().add("logo-text");
+        if (fakeBold) word.getStyleClass().add("logo-fake-bold");
+        Circle dot = new Circle(size * 0.105);
+        dot.getStyleClass().add("logo-dot-shape");
+        HBox logo = new HBox(size * 0.09, word, dot);
         logo.setAlignment(Pos.BASELINE_LEFT);
-        if (small) logo.getStyleClass().add("logo-small");
         return logo;
     }
 

@@ -11,8 +11,8 @@ Argus watches CPU, memory, disk and battery in real time, shows live graphs, ran
 ## Features
 
 - **Live graphs:** CPU, memory, disk and battery charts that update every second.
-- **Warning indicators:** a card turns red when a value stays beyond your limit.
-- **Rogue process list:** top processes ranked by CPU or memory, refreshed every 2 seconds.
+- **Early warnings:** cards turn amber when a value gets high (70%+, or battery under 30%) and red when one of your alert rules fires. Graphs are filled area charts with a 0/50/100% scale. Each card carries a NORMAL / ELEVATED / ALERT tag, and a red banner appears across the top while an alert rule is firing.
+- **Rogue process list:** top processes ranked by CPU or memory, refreshed every 2 seconds, with a name filter. Heavy CPU users are highlighted.
 - **Custom alerts:** set your own thresholds and durations. Alerts fire only after the limit has been breached continuously, so brief spikes don't cause spam. Triggers appear as desktop notifications and are saved to a log.
 - **Compact mode:** a small always-on-top widget with live bars. Choose which metrics it shows in the Settings tab.
 - **Safe process termination:** Argus asks for confirmation, then re-checks the process before ending it. It refuses Argus itself, critical Windows processes, system-account services and processes it has no permission to inspect, and it verifies the process start time so a recycled PID is never killed by mistake.
@@ -66,7 +66,9 @@ src/main/
 │   ├── ProcessGuard.java  Safety checks run before terminating a process
 │   └── Rule.java          Alert rule model
 └── resources/
-    └── argus.css          Green-on-black terminal theme
+    ├── argus.css          Theme (dark and light)
+    ├── icons/             Pixel-art app icon, nav and card icons
+    └── fonts/             Press Start 2P (OFL)
 ```
 
 ## How it works
@@ -85,3 +87,8 @@ Alert rules, trigger logs and settings are stored locally in `~/.argus/argus.db`
 
 - Terminating some processes needs administrator rights. Run Argus as administrator if you see an "access denied" message.
 - Desktop PCs usually have no battery sensor, so the battery card shows "N/A" there.
+
+## Credits
+
+- Pixel font: [Press Start 2P](https://fonts.google.com/specimen/Press+Start+2P) by CodeMan38, SIL Open Font License 1.1 (`src/main/resources/fonts/OFL.txt`).
+- All icons are original pixel art made for this project in a blocky, voxel-game style. Argus is not affiliated with or endorsed by Mojang or Microsoft.

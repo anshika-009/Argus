@@ -21,7 +21,7 @@ public class Sampler {
 
     /** battery is -1 when the machine has no battery. */
     public record Snapshot(double cpu, double mem, double disk, double battery,
-                           String memText, String diskText, String batText) {}
+                           String memText, String diskText, String batText, long uptimeSecs) {}
 
     /** startMillis = process creation time (epoch ms); used to detect recycled PIDs. */
     public record Proc(int pid, String name, double cpu, long memBytes, long startMillis) {}
@@ -91,7 +91,13 @@ public class Sampler {
             log("BATTERY", e);
             batText = "N/A";
         }
-        return new Snapshot(c, m, d, bat, memText, diskText, batText);
+        long uptime = 0;
+        try {
+            uptime = os.getSystemUptime();
+        } catch (Exception e) {
+            log("UPTIME", e);
+        }
+        return new Snapshot(c, m, d, bat, memText, diskText, batText, uptime);
     }
 
 
@@ -148,6 +154,16 @@ public class Sampler {
             if (secs > 0) text += String.format(" \u00b7 %dh %02dm left", secs / 3600, (secs % 3600) / 60);
         }
         return new String[]{String.valueOf(pct), text};
+    }
+
+    /** One line describing the machine, e.g. "AMD Ryzen 5 7520U - 8 threads - 15.3 GB RAM". */
+    public String hardwareSummary() {
+        try {
+            return String.format("%s \u00b7 %d threads \u00b7 %.1f GB RAM",
+                    cpu.getProcessorIdentifier().getName().trim(), cores, mem.getTotal() / 1e9);
+        } catch (Exception e) {
+            return "Argus";
+        }
     }
 
     private final java.util.Set<String> reported = new java.util.HashSet<>();

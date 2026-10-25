@@ -64,6 +64,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -130,6 +131,8 @@ public class Main extends Application {
     private final ListView<String> logView = new ListView<>();
     private List<Sampler.Proc> lastProcs = new ArrayList<>();
     private boolean sortByCpu = true;
+    private int selectedPid = -1;          // process the user picked; stays selected until it exits or they deselect it
+    private boolean refreshingTable;       // true while the table is rebuilt in code, so that is not mistaken for a click
     private int tickCount = 0;
 
     // The sampler thread PUBLISHES data here; the UI thread only READS the newest value once per frame.
@@ -269,7 +272,7 @@ public class Main extends Application {
                     lastProcs = p;
                     if (stage.isShowing()) {
                         updateTopProcess();
-                        refreshProcTable();
+                        refreshProcTable(false);
                     }
                 }
             }
@@ -641,7 +644,7 @@ public class Main extends Application {
         keepOneSelected(sort);
         sort.selectedToggleProperty().addListener((o, a, b) -> {
             sortByCpu = byCpu.isSelected();
-            refreshProcTable();
+            refreshProcTable(true);
         });
 
         Button kill = new Button("TERMINATE");
@@ -653,7 +656,7 @@ public class Main extends Application {
         sortLbl.getStyleClass().add("eyebrow");
         procFilter.setPromptText("filter by name...");
         procFilter.setPrefWidth(180);
-        procFilter.textProperty().addListener((o, a, b) -> refreshProcTable());
+        procFilter.textProperty().addListener((o, a, b) -> refreshProcTable(true));
         procCount.getStyleClass().addAll("mono", "dim");
         HBox bar = new HBox(10, sortLbl, byCpu, byMem, procFilter, procCount, sp, kill);
         bar.setAlignment(Pos.CENTER_LEFT);
@@ -672,7 +675,8 @@ public class Main extends Application {
                 setText(empty ? null : text);
                 getStyleClass().remove("hot");
                 if (!empty && getIndex() >= 0 && getIndex() < getTableView().getItems().size()
-                        && getTableView().getItems().get(getIndex()).cpu() >= 50) {
+                        && getTableView().getItems().get(getIndex()).cpu() >= 50
+                        && getTableView().getItems().get(getIndex()).pid() != 0) {   // Idle's % is spare CPU, never "hot"
                     getStyleClass().add("hot");
                 }
             }
@@ -695,6 +699,9 @@ public class Main extends Application {
                         + "\nIt holds no memory, so it can't cause a memory alert." + free));
             }
         });
+        procTable.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> {
+            if (!refreshingTable) selectedPid = b == null ? -1 : b.pid();      // only real clicks change the pick
+        });
         procTable.setPlaceholder(new Label("No matching processes"));
         procTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         VBox.setVgrow(procTable, Priority.ALWAYS);
@@ -704,25 +711,56 @@ public class Main extends Application {
         return page;
     }
 
-    private void refreshProcTable() {
-        Sampler.Proc selected = procTable.getSelectionModel().getSelectedItem();
+    /**
+     * resort = false (the 2-second timer): while a process is selected the rows keep their order and only the numbers
+     * update, so the row you picked does not jump away. resort = true (sort or filter changed): rebuild the ranking.
+     * The selected process is always kept in the table until it exits or the user deselects it.
+     */
+    private void refreshProcTable(boolean resort) {
+        Map<Integer, Sampler.Proc> byPid = new HashMap<>();
+        for (Sampler.Proc p : lastProcs) byPid.put(p.pid(), p);
+        if (selectedPid != -1 && !byPid.containsKey(selectedPid)) selectedPid = -1;      // it exited
+
+        String needle = procFilter.getText() == null ? "" : procFilter.getText().trim().toLowerCase();
+        if (selectedPid != -1 && !needle.isEmpty() && !byPid.get(selectedPid).name().toLowerCase().contains(needle)) {
+            selectedPid = -1;                                                              // filtered out on purpose
+        }
+
         Comparator<Sampler.Proc> cmp = sortByCpu
                 ? Comparator.comparingDouble(Sampler.Proc::cpu).reversed()
                 : Comparator.comparingLong(Sampler.Proc::memBytes).reversed();
-        String needle = procFilter.getText() == null ? "" : procFilter.getText().trim().toLowerCase();
         List<Sampler.Proc> matching = lastProcs.stream()
                 .filter(p -> needle.isEmpty() || p.name().toLowerCase().contains(needle))
                 .sorted(cmp).toList();
-        List<Sampler.Proc> top = matching.stream().limit(25).toList();
-        procCount.setText("showing " + top.size() + " of " + matching.size());
-        procTable.getItems().setAll(top);
-        if (selected != null) {                       // keep the selection across refreshes
-            for (Sampler.Proc p : top) {
-                if (p.pid() == selected.pid()) {
-                    procTable.getSelectionModel().select(p);
-                    break;
+
+        boolean locked = selectedPid != -1 && !resort && !procTable.getItems().isEmpty();
+        List<Sampler.Proc> shown = new ArrayList<>();
+        if (locked) {
+            for (Sampler.Proc old : procTable.getItems()) {                // same order, fresh numbers
+                Sampler.Proc cur = byPid.get(old.pid());
+                if (cur != null) shown.add(cur);
+            }
+        } else {
+            shown.addAll(matching.stream().limit(25).toList());
+        }
+        if (selectedPid != -1 && shown.stream().noneMatch(p -> p.pid() == selectedPid)) {
+            shown.add(byPid.get(selectedPid));                             // keep it even if it fell out of the top 25
+        }
+
+        procCount.setText("showing " + shown.size() + " of " + matching.size() + (locked ? " \u00b7 order locked while selected" : ""));
+        refreshingTable = true;
+        try {
+            procTable.getItems().setAll(shown);
+            if (selectedPid != -1) {
+                for (Sampler.Proc p : shown) {
+                    if (p.pid() == selectedPid) {
+                        procTable.getSelectionModel().select(p);
+                        break;
+                    }
                 }
             }
+        } finally {
+            refreshingTable = false;
         }
     }
 

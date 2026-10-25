@@ -12,7 +12,6 @@ import javafx.css.PseudoClass;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Cursor;
-import javafx.scene.Group;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
@@ -29,15 +28,16 @@ import javafx.scene.control.ListView;
 import javafx.scene.control.ProgressBar;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableRow;
+import javafx.scene.control.Tooltip;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
 import javafx.scene.control.ToggleButton;
 import javafx.scene.control.ToggleGroup;
 import javafx.scene.image.Image;
-import javafx.scene.image.ImageView;
 import javafx.scene.paint.Color;
-import javafx.scene.shape.Circle;
-import javafx.scene.shape.SVGPath;
+import javafx.scene.shape.Rectangle;
+import javafx.scene.text.Font;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
@@ -74,7 +74,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
-/** Argus - lightweight system monitor. Hacker-terminal theme. */
+/** Argus - lightweight system monitor. Flat grid theme: dark (default) and beige light. */
 public class Main extends Application {
 
     private static final int HISTORY = 60;                       // seconds of graph history (ring buffer)
@@ -90,12 +90,11 @@ public class Main extends Application {
     private String css;
 
     private Stage stage;
-    private boolean dark = false;                 // false = cream (default), true = night
+    private boolean dark = true;                  // true = dark (default), false = light (beige)
     private VBox compactRows;
     private final Map<String, HBox> compactRowNodes = new LinkedHashMap<>();
     private final Set<String> compactMetrics = new HashSet<>();   // which metrics the compact widget shows
     private Button themeBtn;
-    private Label uptimeLabel;
     private ToggleButton bDash, bProc, bAlert, bSet;
     private Label alertTileText;
     private Label topProcName;
@@ -104,6 +103,12 @@ public class Main extends Application {
     private int ruleActive;
     private HBox banner;
     private Label bannerText;
+    private Label bannerChip;
+    private Region logoRule;
+    private Label tagline;
+    private final Map<String, Integer> elevatedSecs = new LinkedHashMap<>();   // consecutive seconds each metric has been high
+    private static final PseudoClass ALERT = PseudoClass.getPseudoClass("alert");
+    private static final int WARN_AFTER_SECS = 30;
     private String bannerKey = "";
     private String bannerDismissedKey = "";
     private Label footerLeft;
@@ -137,7 +142,7 @@ public class Main extends Application {
 
     @Override
     public void start(Stage primary) throws Exception {
-        Application.setUserAgentStylesheet(new PrimerLight().getUserAgentStylesheet());   // cream is the default look
+        Application.setUserAgentStylesheet(new PrimerDark().getUserAgentStylesheet());   // dark is the default look
         Platform.setImplicitExit(false);
         css = Main.class.getResource("/argus.css").toExternalForm();
         stage = primary;
@@ -152,46 +157,48 @@ public class Main extends Application {
 
         // ---- header with navigation
         ToggleGroup nav = new ToggleGroup();
-        bDash = navButton("Dashboard", "dashboard", nav);
-        bProc = navButton("Processes", "processes", nav);
-        bAlert = navButton("Alerts", "alerts", nav);
-        bSet = navButton("Settings", "settings", nav);
+        bDash = navButton("Dashboard", nav);
+        bProc = navButton("Processes", nav);
+        bAlert = navButton("Alerts", nav);
+        bSet = navButton("Settings", nav);
         bDash.setSelected(true);
         keepOneSelected(nav);
 
-        ImageView mark = new ImageView(new Image(Main.class.getResource("/icons/app_128.png").toExternalForm()));
-        mark.setFitWidth(40);
-        mark.setFitHeight(40);
-        mark.setSmooth(true);
-        Label wordmark = new Label("A\u2009R\u2009G\u2009U\u2009S");
-        wordmark.getStyleClass().add("wordmark");
-        Label tagline = new Label("SYSTEM MONITOR");
+        HBox logo = buildLogo(false);
+        logo.setPadding(new Insets(0, 28, 0, 24));
+        logoRule = new Region();
+        logoRule.getStyleClass().add("vrule");
+        logoRule.setMinWidth(1);
+        logoRule.setPrefWidth(1);
+        logoRule.setMaxWidth(1);
+        tagline = new Label("SYSTEM MONITOR");
         tagline.getStyleClass().add("tagline");
-        VBox words = new VBox(0, wordmark, tagline);
-        words.setAlignment(Pos.CENTER_LEFT);
-        HBox logo = new HBox(12, mark, words);
-        logo.setAlignment(Pos.CENTER_LEFT);
-        logo.setPadding(new Insets(0, 28, 0, 0));
         Label status = new Label("\u25CF LIVE \u00b7 1S");
-        status.getStyleClass().addAll("tag", "tag-ok");
+        status.getStyleClass().add("status");
         FadeTransition pulse = new FadeTransition(Duration.seconds(1), status);
         pulse.setFromValue(1.0);
         pulse.setToValue(0.45);
         pulse.setCycleCount(Animation.INDEFINITE);
         pulse.setAutoReverse(true);
         pulse.play();
-        Button compactBtn = new Button("Compact mode");
-        compactBtn.getStyleClass().add("btn");
+        Button compactBtn = new Button("COMPACT MODE");
+        compactBtn.getStyleClass().addAll("btn", "btn-solid");
         compactBtn.setOnAction(e -> showCompact());
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        themeBtn = new Button("Night mode");
+        themeBtn = new Button("LIGHT MODE");
         themeBtn.getStyleClass().add("btn");
         themeBtn.setOnAction(e -> applyTheme(!dark, true));
-        HBox header = new HBox(logo, bDash, bProc, bAlert, bSet, spacer, status, themeBtn, compactBtn);
+        HBox navBox = new HBox(6, bDash, bProc, bAlert, bSet);
+        navBox.setAlignment(Pos.CENTER_LEFT);
+        HBox right = new HBox(12, status, themeBtn, compactBtn);
+        right.setAlignment(Pos.CENTER_RIGHT);
+        HBox header = new HBox(logo, logoRule, tagline, navBox, spacer, right);
+        HBox.setMargin(navBox, new Insets(0, 0, 0, 4));
         header.getStyleClass().add("header");
         header.setAlignment(Pos.CENTER_LEFT);
         header.setPrefHeight(68);
+        header.setMinHeight(68);
 
         // ---- pages
         VBox dashboard = buildDashboard();
@@ -212,15 +219,15 @@ public class Main extends Application {
         VBox rootBox = new VBox(header, banner, content, footer);
         VBox.setVgrow(content, Priority.ALWAYS);
 
-        Scene scene = new Scene(rootBox, 1100, 700);
+        Scene scene = new Scene(rootBox, 1180, 720);
         scene.getStylesheets().add(css);
         stage.setTitle("Argus");
         stage.setScene(scene);
-        stage.setMinWidth(960);
+        stage.setMinWidth(1100);
         stage.setMinHeight(600);
 
         buildCompact();
-        applyTheme("night".equals(db.getSetting("theme", "cream")), false);   // restore saved theme
+        applyTheme(!"light".equals(db.getSetting("theme", "night")), false);   // restore saved theme (dark by default)
         setupTray();
         stage.setOnCloseRequest(e -> {
             if (tray != null) {          // keep monitoring from the tray
@@ -302,51 +309,118 @@ public class Main extends Application {
     private void render(Frame f) {
         Sampler.Snapshot s = f.s();
         AlertEngine.Result r = f.r();
-        update("CPU", s.cpu(), pct(s.cpu()),
-                s.cpu() < 0 ? "N/A" : r.firing().contains("CPU") ? "\u26A0 ALERT: limit exceeded" : "normal", r);
+        update("CPU", s.cpu(), pct(s.cpu()), s.cpu() < 0 ? "N/A" : sampler.cpuSummary(), r);
         update("MEMORY", s.mem(), pct(s.mem()), s.memText(), r);
         update("DISK", s.disk(), pct(s.disk()), s.diskText(), r);
         update("BATTERY", s.battery(), pct(s.battery()), s.batText(), r);
         if (stage.isShowing()) {
-            uptimeLabel.setText("UP " + fmtUptime(s.uptimeSecs()));
-            footerLeft.setText("LAST SAMPLE " + LocalTime.now().format(TIME) + " \u00b7 EVERY 1S \u00b7 " + HISTORY + "S HISTORY");
+            footerLeft.setText("LAST SAMPLE " + LocalTime.now().format(TIME) + " \u00b7 EVERY 1S \u00b7 " + HISTORY
+                    + "S HISTORY \u00b7 UP " + fmtUptime(s.uptimeSecs()));
         }
-        updateBanner(r.firing());
+        trackElevated("CPU", s.cpu());
+        trackElevated("MEMORY", s.mem());
+        trackElevated("DISK", s.disk());
+        updateBanner(r.firing(), s);
     }
 
-    /** Red banner across the top while any alert rule is firing; dismissable until the set of firing metrics changes. */
-    private void updateBanner(Set<String> firing) {
+    private void trackElevated(String metric, double v) {
+        boolean high = v >= 70;
+        elevatedSecs.merge(metric, 1, (old, one) -> old + 1);
+        if (!high) elevatedSecs.put(metric, 0);
+    }
+
+    /**
+     * Banner under the header. RED "ALERT" while an alert rule is firing; otherwise amber "WARNING"
+     * once CPU, memory or disk has stayed above 70% for 30 seconds. Dismissable until the cause changes.
+     */
+    private void updateBanner(Set<String> firing, Sampler.Snapshot s) {
         java.util.TreeSet<String> names = new java.util.TreeSet<>(firing);
-        bannerKey = String.join(",", names);
-        if (names.isEmpty()) bannerDismissedKey = "";
-        boolean show = !names.isEmpty() && !bannerKey.equals(bannerDismissedKey);
+        String key = "";
+        String text = "";
+        boolean isAlert = !names.isEmpty();
+        if (isAlert) {
+            key = "A:" + String.join(",", names);
+            text = String.join(", ", names)
+                    + (names.size() == 1 ? " has crossed its alert limit" : " have crossed their alert limits");
+        } else {
+            String worst = null;
+            for (String m : new String[]{"CPU", "MEMORY", "DISK"}) {
+                if (elevatedSecs.getOrDefault(m, 0) >= WARN_AFTER_SECS
+                        && (worst == null || valueOf(s, m) > valueOf(s, worst))) worst = m;
+            }
+            if (worst != null) {
+                key = "W:" + worst;
+                text = String.format("%s at %.0f%% for %s.%s", titleCase(worst), valueOf(s, worst),
+                        fmtDur(elevatedSecs.get(worst)), topCause(worst));
+            }
+        }
+        bannerKey = key;
+        if (key.isEmpty()) bannerDismissedKey = "";
+        boolean show = !key.isEmpty() && !key.equals(bannerDismissedKey);
         if (show) {
-            bannerText.setText(String.join(", ", names)
-                    + (names.size() == 1 ? " has crossed its alert limit" : " have crossed their alert limits"));
+            bannerChip.setText(isAlert ? "ALERT" : "WARNING");
+            bannerChip.getStyleClass().setAll("tag", isAlert ? "tag-solid-bad" : "tag-solid-warn");
+            bannerText.setText(text);
+            banner.pseudoClassStateChanged(ALERT, isAlert);
         }
         banner.setVisible(show);
         banner.setManaged(show);
         updateAlertTile(names);
     }
 
+    private static double valueOf(Sampler.Snapshot s, String metric) {
+        return switch (metric) {
+            case "CPU" -> s.cpu();
+            case "MEMORY" -> s.mem();
+            case "DISK" -> s.disk();
+            default -> s.battery();
+        };
+    }
+
+    private static String titleCase(String metric) {
+        return metric.charAt(0) + metric.substring(1).toLowerCase();
+    }
+
+    private static String fmtDur(int secs) {
+        return secs < 60 ? secs + "s" : (secs / 60) + "m " + String.format("%02d", secs % 60) + "s";
+    }
+
+    /** " Top cause: name (1.75 GB)." for CPU and memory; empty for disk. */
+    private String topCause(String metric) {
+        if (metric.equals("DISK")) return "";
+        boolean mem = metric.equals("MEMORY");
+        Comparator<Sampler.Proc> heaviest = mem
+                ? Comparator.comparingLong(Sampler.Proc::memBytes)
+                : Comparator.comparingDouble(Sampler.Proc::cpu);
+        return lastProcs.stream()
+                .filter(p -> p.pid() != 0 && !p.name().toLowerCase().contains("idle"))
+                .max(heaviest)
+                .map(p -> " Top cause: " + p.name() + " ("
+                        + (mem ? fmtMem(p.memBytes()) : String.format("%.1f%% CPU", p.cpu())) + ").")
+                .orElse("");
+    }
+
     private void buildBanner() {
-        Label chip = new Label("ALERT");
-        chip.getStyleClass().addAll("tag", "tag-solid-bad");
+        bannerChip = new Label("WARNING");
+        bannerChip.getStyleClass().addAll("tag", "tag-solid-warn");
         bannerText = new Label();
         Region sp = new Region();
         HBox.setHgrow(sp, Priority.ALWAYS);
+        Button view = new Button("VIEW PROCESSES");
+        view.getStyleClass().addAll("btn", "btn-solid");
+        view.setOnAction(e -> bProc.fire());
         Button close = new Button("\u2715");
-        close.getStyleClass().add("btn");
+        close.getStyleClass().addAll("btn", "btn-ghost");
         close.setOnAction(e -> {
             bannerDismissedKey = bannerKey;
             banner.setVisible(false);
             banner.setManaged(false);
         });
-        banner = new HBox(14, icon("warning", 28), chip, bannerText, sp, close);
+        banner = new HBox(14, bannerChip, bannerText, sp, view, close);
         banner.getStyleClass().add("banner");
         banner.setVisible(false);
         banner.setManaged(false);
-        VBox.setMargin(banner, new Insets(14, 20, 0, 20));
+        VBox.setMargin(banner, new Insets(20, 24, 0, 24));
     }
 
     private HBox buildFooter() {
@@ -371,7 +445,7 @@ public class Main extends Application {
         if (compact.isShowing()) {
             compactBars.get(metric).setProgress(Math.max(v, 0) / 100.0);
             compactBars.get(metric).setStyle(firing ? "-fx-accent: -argus-warn;"
-                    : elevated ? "-fx-accent: -argus-amber;" : "-fx-accent: -argus-accent;");
+                    : elevated ? "-fx-accent: -argus-amber;" : "-fx-accent: -argus-ok;");
             compactLabels.get(metric).setText(valueText);
         }
     }
@@ -382,7 +456,7 @@ public class Main extends Application {
 
     // ---------------------------------------------------------------- dashboard
 
-    /** One metric card: title, big value, rolling line chart (ring buffer of the last 60 samples). */
+    /** One metric cell: number badge + status tag, title, spec line, sparkline (ring buffer of the last 60 samples), big value. */
     private final class MetricCard {
         final String metric;
         final Label num = new Label("--");
@@ -391,40 +465,43 @@ public class Main extends Application {
         final Label tag = new Label("--");
         final XYChart.Series<Number, Number> series = new XYChart.Series<>();
         final VBox box;
+        final NumberAxis xAxis;
 
-        MetricCard(String title, String metric) {
+        MetricCard(String title, String metric, int index) {
             this.metric = metric;
             NumberAxis x = new NumberAxis(0, HISTORY - 1, 1);
+            xAxis = x;
             NumberAxis y = new NumberAxis(0, 100, 50);          // scale: 0 / 50 / 100 %
-            x.setTickLabelsVisible(false);
-            x.setTickMarkVisible(false);
-            x.setMinorTickVisible(false);
-            x.setOpacity(0);
-            y.setTickMarkVisible(false);
-            y.setMinorTickVisible(false);
+            for (NumberAxis ax : List.of(x, y)) {
+                ax.setTickLabelsVisible(false);
+                ax.setTickMarkVisible(false);
+                ax.setMinorTickVisible(false);
+                ax.setOpacity(0);
+            }
+            y.setPrefWidth(0);
             AreaChart<Number, Number> chart = new AreaChart<>(x, y);
             chart.setCreateSymbols(false);
             chart.setLegendVisible(false);
             chart.setAnimated(false);
-            chart.setHorizontalGridLinesVisible(true);
+            chart.setHorizontalGridLinesVisible(false);
             chart.setVerticalGridLinesVisible(false);
             chart.getData().add(series);
             chart.setMinHeight(70);
             VBox.setVgrow(chart, Priority.ALWAYS);
 
+            Label badge = new Label(String.format("%02d", index));
+            badge.getStyleClass().add("badge");
             Region sp = new Region();
             HBox.setHgrow(sp, Priority.ALWAYS);
             tag.getStyleClass().addAll("tag", "tag-dim");
-            HBox top = new HBox(icon(iconFor(metric), 28), sp, tag);
+            HBox top = new HBox(badge, sp, tag);
             top.setAlignment(Pos.CENTER_LEFT);
 
             Label name = new Label(title);
             name.getStyleClass().add("tile-title");
-            VBox.setMargin(name, new Insets(10, 0, 0, 0));
+            VBox.setMargin(name, new Insets(14, 0, 0, 0));
             sub.getStyleClass().add("sub");
-            sub.setWrapText(true);
-            sub.setMinHeight(34);
-            sub.setAlignment(Pos.TOP_LEFT);
+            sub.setMinHeight(18);
             num.getStyleClass().add("big");
             unit.getStyleClass().add("unit");
             HBox valueRow = new HBox(4, num, unit);
@@ -439,10 +516,11 @@ public class Main extends Application {
             List<XYChart.Data<Number, Number>> pts = new ArrayList<>(data.length);
             for (int i = 0; i < data.length; i++) pts.add(new XYChart.Data<Number, Number>(i, data[i]));
             series.getData().setAll(pts);
+            xAxis.setUpperBound(Math.max(data.length - 1, 12));     // fill the width early on, settle at 60 samples
             boolean percent = valueText.endsWith("%");
             num.setText(percent ? valueText.substring(0, valueText.length() - 1) : valueText);
             unit.setText(percent ? "%" : "");
-            sub.setText(subText);
+            sub.setText(subText.replaceAll("\\s+", " ").toUpperCase());
             box.pseudoClassStateChanged(WARN, firing);
             box.pseudoClassStateChanged(ELEVATED, elevated && !firing);
 
@@ -454,9 +532,7 @@ public class Main extends Application {
 
     private VBox buildDashboard() {
         GridPane grid = new GridPane();
-        grid.setHgap(14);
-        grid.setVgap(14);
-        grid.setPadding(new Insets(14, 24, 22, 24));
+        grid.getStyleClass().add("grid-frame");        // 1px frame; cells draw their own right/bottom rules
         for (int i = 0; i < 4; i++) {
             ColumnConstraints cc = new ColumnConstraints();
             cc.setPercentWidth(25);
@@ -472,22 +548,15 @@ public class Main extends Application {
 
         int col = 0;
         for (String m : METRICS) {
-            MetricCard card = new MetricCard(tileTitle(m), m);
+            MetricCard card = new MetricCard(tileTitle(m), m, col + 1);
             cards.put(m, card);
             grid.add(card.box, col++, 0);
         }
         grid.add(buildAlertTile(), 0, 1, 2, 1);
         grid.add(buildTopProcessTile(), 2, 1, 2, 1);
 
-        Label hw = new Label(sampler.hardwareSummary());
-        hw.getStyleClass().add("dim");
-        uptimeLabel = new Label("UP --");
-        uptimeLabel.getStyleClass().add("dim");
-        Region gap = new Region();
-        HBox.setHgrow(gap, Priority.ALWAYS);
-        HBox summary = new HBox(hw, gap, uptimeLabel);
-        summary.setPadding(new Insets(14, 28, 0, 28));
-        VBox page = new VBox(summary, grid);
+        VBox page = new VBox(grid);
+        page.setPadding(new Insets(20, 24, 0, 24));
         VBox.setVgrow(grid, Priority.ALWAYS);
         return page;
     }
@@ -496,45 +565,44 @@ public class Main extends Application {
         return switch (metric) {
             case "CPU" -> "CPU load";
             case "MEMORY" -> "Memory";
-            case "DISK" -> "Hard disk space";
+            case "DISK" -> "Hard disk";
             default -> "Battery";
         };
     }
 
     private VBox buildAlertTile() {
-        Label title = new Label("Alert rules");
-        title.getStyleClass().add("tile-title");
+        Label eyebrow = new Label("ALERT RULES");
+        eyebrow.getStyleClass().add("eyebrow");
         alertTileText = new Label("Loading rules...");
-        alertTileText.getStyleClass().add("sub");
+        alertTileText.getStyleClass().add("tile-title");
         alertTileText.setWrapText(true);
-        Button manage = new Button("Manage alerts");
-        manage.getStyleClass().addAll("btn", "btn-accent");
+        Button manage = new Button("MANAGE ALERTS");
+        manage.getStyleClass().add("btn");
         manage.setOnAction(e -> bAlert.fire());
         Region sp = new Region();
         VBox.setVgrow(sp, Priority.ALWAYS);
-        HBox row = new HBox(manage);
-        row.setAlignment(Pos.CENTER_RIGHT);
-        VBox tile = new VBox(8, title, alertTileText, sp, row);
+        VBox tile = new VBox(8, eyebrow, alertTileText, manage, sp);
         tile.getStyleClass().add("tile");
+        tile.setAlignment(Pos.CENTER_LEFT);
+        VBox.setMargin(manage, new Insets(6, 0, 0, 0));
         return tile;
     }
 
     private VBox buildTopProcessTile() {
-        Label title = new Label("Heaviest process");
-        title.getStyleClass().add("tile-title");
+        Label eyebrow = new Label("HEAVIEST PROCESS");
+        eyebrow.getStyleClass().add("eyebrow");
         topProcName = new Label("Waiting for data...");
-        topProcName.getStyleClass().add("tile-big");
+        topProcName.getStyleClass().add("tile-title");
         topProcSub = new Label(" ");
         topProcSub.getStyleClass().add("sub");
-        Button view = new Button("View processes");
-        view.getStyleClass().addAll("btn", "btn-accent");
+        Button view = new Button("VIEW PROCESSES");
+        view.getStyleClass().addAll("btn", "btn-solid");
         view.setOnAction(e -> bProc.fire());
         Region sp = new Region();
         VBox.setVgrow(sp, Priority.ALWAYS);
-        HBox row = new HBox(view);
-        row.setAlignment(Pos.CENTER_RIGHT);
-        VBox tile = new VBox(8, title, topProcName, topProcSub, sp, row);
+        VBox tile = new VBox(8, eyebrow, topProcName, topProcSub, view, sp);
         tile.getStyleClass().add("tile");
+        VBox.setMargin(view, new Insets(6, 0, 0, 0));
         return tile;
     }
 
@@ -544,20 +612,19 @@ public class Main extends Application {
                 .max(Comparator.comparingDouble(Sampler.Proc::cpu))
                 .ifPresent(p -> {
                     topProcName.setText(p.name());
-                    topProcSub.setText(String.format("%.1f%% CPU \u00b7 %s memory \u00b7 PID %d",
-                            p.cpu(), fmtMem(p.memBytes()), p.pid()));
+                    topProcSub.setText(String.format("%.1f%% CPU \u00b7 %s \u00b7 PID %d",
+                            p.cpu(), fmtMem(p.memBytes()), p.pid()).toUpperCase());
                 });
     }
 
     private void updateAlertTile(Set<String> firing) {
         if (alertTileText == null) return;
         if (!firing.isEmpty()) {
-            alertTileText.setText(String.join(", ", firing)
-                    + (firing.size() == 1 ? " is over its limit right now." : " are over their limits right now."));
+            alertTileText.setText(String.join(", ", firing) + (firing.size() == 1 ? " is over its limit" : " are over their limits"));
         } else if (ruleActive == 0) {
-            alertTileText.setText("No alert rules are switched on. Turn some on to get warned early.");
+            alertTileText.setText("No rules switched on");
         } else {
-            alertTileText.setText("All clear. " + ruleActive + " of " + ruleTotal + " rules are watching your system.");
+            alertTileText.setText("All clear \u00b7 " + ruleActive + " of " + ruleTotal + " rules watching");
         }
     }
 
@@ -566,7 +633,7 @@ public class Main extends Application {
     private VBox buildProcesses() {
         ToggleGroup sort = new ToggleGroup();
         ToggleButton byCpu = sortButton("CPU", sort);
-        ToggleButton byMem = sortButton("Memory", sort);
+        ToggleButton byMem = sortButton("MEMORY", sort);
         byCpu.setSelected(true);
         keepOneSelected(sort);
         sort.selectedToggleProperty().addListener((o, a, b) -> {
@@ -574,15 +641,13 @@ public class Main extends Application {
             refreshProcTable();
         });
 
-        Button kill = new Button("Terminate");
+        Button kill = new Button("TERMINATE");
         kill.getStyleClass().addAll("btn", "btn-danger");
-        kill.setGraphic(icon("close", 14));
-        kill.setGraphicTextGap(8);
         kill.setOnAction(e -> terminateSelected());
         Region sp = new Region();
         HBox.setHgrow(sp, Priority.ALWAYS);
-        Label sortLbl = new Label("Sort by");
-        sortLbl.getStyleClass().add("dim");
+        Label sortLbl = new Label("SORT BY");
+        sortLbl.getStyleClass().add("eyebrow");
         procFilter.setPromptText("filter by name...");
         procFilter.setPrefWidth(180);
         procFilter.textProperty().addListener((o, a, b) -> refreshProcTable());
@@ -610,6 +675,23 @@ public class Main extends Application {
             }
         });
         procTable.getColumns().addAll(pidCol, cpuCol, memCol);
+        // PID 0 is Windows' "System Idle Process": a placeholder for unused CPU time, not a real program.
+        procTable.setRowFactory(tv -> new TableRow<>() {
+            @Override
+            protected void updateItem(Sampler.Proc p, boolean empty) {
+                super.updateItem(p, empty);
+                if (empty || p == null || p.pid() != 0) {
+                    setTooltip(null);
+                    return;
+                }
+                Sampler.Snapshot s = shownFrame == null ? null : shownFrame.s();
+                String free = s == null || s.memFreeBytes() < 0 ? ""
+                        : String.format("\n%s of your RAM is still free.", fmtMem(s.memFreeBytes()));
+                setTooltip(new Tooltip(p.name() + " is a Windows placeholder, not a real program."
+                        + "\nIts " + String.format("%.1f%%", p.cpu()) + " is the share of processor time nobody is using."
+                        + "\nIt holds no memory, so it can't cause a memory alert." + free));
+            }
+        });
         procTable.setPlaceholder(new Label("No matching processes"));
         procTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         VBox.setVgrow(procTable, Priority.ALWAYS);
@@ -735,8 +817,8 @@ public class Main extends Application {
         TextField seconds = new TextField();
         seconds.setPromptText("seconds");
         seconds.setPrefWidth(90);
-        Button add = new Button("Add rule");
-        add.getStyleClass().addAll("btn", "btn-primary");
+        Button add = new Button("ADD RULE");
+        add.getStyleClass().addAll("btn", "btn-solid");
         add.setOnAction(e -> {
             try {
                 double t = Double.parseDouble(threshold.getText().trim());
@@ -760,7 +842,7 @@ public class Main extends Application {
                 refreshRules();
             }
         });
-        Button delete = new Button("Delete");
+        Button delete = new Button("DELETE");
         delete.getStyleClass().addAll("btn", "btn-danger");
         delete.setOnAction(e -> {
             Rule r = ruleTable.getSelectionModel().getSelectedItem();
@@ -786,15 +868,15 @@ public class Main extends Application {
         return page;
     }
 
-    /** Pill-shaped on/off switch for one alert rule. */
+    /** Square on/off switch for one alert rule. */
     private StackPane switchFor(Rule r) {
-        Circle thumb = new Circle(9, Color.WHITE);
+        Rectangle thumb = new Rectangle(16, 16, Color.web("#f4f4f2"));
         StackPane sw = new StackPane(thumb);
         sw.getStyleClass().add("switch");
         sw.pseudoClassStateChanged(ON, r.enabled());
-        sw.setMinSize(46, 24);
-        sw.setPrefSize(46, 24);
-        sw.setMaxSize(46, 24);
+        sw.setMinSize(44, 24);
+        sw.setPrefSize(44, 24);
+        sw.setMaxSize(44, 24);
         sw.setPadding(new Insets(0, 3, 0, 3));
         StackPane.setAlignment(thumb, r.enabled() ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
         sw.setCursor(Cursor.HAND);
@@ -820,28 +902,32 @@ public class Main extends Application {
     // ---------------------------------------------------------------- compact mode + tray
 
     private void buildCompact() {
-        VBox box = new VBox(10);
-        box.setPadding(new Insets(12));
-        Label title = new Label("Argus");
-        title.getStyleClass().add("logo");
-        Button expand = new Button("Expand");
+        VBox box = new VBox(12);
+        box.setPadding(new Insets(14));
+        box.getStyleClass().add("compact-root");
+        HBox title = buildLogo(true);
+        Button expand = new Button("EXPAND");
         expand.getStyleClass().add("btn");
         expand.setOnAction(e -> showMain());
         Region sp = new Region();
         HBox.setHgrow(sp, Priority.ALWAYS);
+        HBox top = new HBox(title, sp, expand);
+        top.setAlignment(Pos.CENTER_LEFT);
         compactRows = new VBox(10);
-        box.getChildren().addAll(new HBox(title, sp, expand), compactRows);
+        box.getChildren().addAll(top, compactRows);
         for (String m : METRICS) {
             Label name = new Label(m.substring(0, Math.min(4, m.length())));
-            name.setPrefWidth(48);
+            name.getStyleClass().add("eyebrow");
+            name.setPrefWidth(44);
             ProgressBar bar = new ProgressBar(0);
             bar.setPrefWidth(150);
             Label val = new Label("--");
+            val.getStyleClass().add("mono");
             val.setPrefWidth(44);
             val.setAlignment(Pos.CENTER_RIGHT);
             compactBars.put(m, bar);
             compactLabels.put(m, val);
-            HBox row = new HBox(8, icon(iconFor(m), 16), name, bar, val);
+            HBox row = new HBox(8, name, bar, val);
             row.setAlignment(Pos.CENTER_LEFT);
             compactRowNodes.put(m, row);
         }
@@ -977,7 +1063,7 @@ public class Main extends Application {
 
     // ---------------------------------------------------------------- theme
 
-    /** Switches the AtlantaFX base theme and toggles the "night" palette class on every window. */
+    /** Switches the AtlantaFX base theme and toggles the "night" (dark) palette class on every window. */
     private void applyTheme(boolean darkMode, boolean save) {
         dark = darkMode;
         Application.setUserAgentStylesheet(dark
@@ -985,8 +1071,12 @@ public class Main extends Application {
                 : new PrimerLight().getUserAgentStylesheet());
         setNight(stage.getScene().getRoot(), dark);
         setNight(compact.getScene().getRoot(), dark);
-        themeBtn.setText(dark ? "Cream mode" : "Night mode");
-        if (save) db.setSetting("theme", dark ? "night" : "cream");
+        themeBtn.setText(dark ? "LIGHT MODE" : "DARK MODE");
+        for (Node n : new Node[]{logoRule, tagline}) {      // the dark header has a divider and a tagline; the light one does not
+            n.setVisible(dark);
+            n.setManaged(dark);
+        }
+        if (save) db.setSetting("theme", dark ? "night" : "light");
     }
 
     private static void setNight(Parent root, boolean night) {
@@ -1017,44 +1107,40 @@ public class Main extends Application {
         return d > 0 ? String.format("%dd %02d:%02d:%02d", d, h, m, sec) : String.format("%02d:%02d:%02d", h, m, sec);
     }
 
-    private static ToggleButton navButton(String text, String iconName, ToggleGroup g) {
-        ToggleButton b = new ToggleButton(text);
-        b.setGraphic(icon(iconName, 18));
-        b.setGraphicTextGap(8);
+    /** The bundled logo face (src/main/resources/fonts/SpaceGrotesk-Bold.ttf) at the given size, or null if absent. */
+    private static Font logoFont(double size) {
+        try (InputStream in = Main.class.getResourceAsStream("/fonts/SpaceGrotesk-Bold.ttf")) {
+            return in == null ? null : Font.loadFont(in, size);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** "Argus" in the grotesque logo face with a red full stop. Falls back to Segoe UI Bold if the font file is missing. */
+    private static HBox buildLogo(boolean small) {
+        Label word = new Label("Argus");
+        Label dot = new Label(".");
+        Font f = logoFont(small ? 20 : 32);
+        if (f != null) {
+            word.setFont(f);
+            dot.setFont(f);
+            word.getStyleClass().add("logo-text");
+            dot.getStyleClass().add("logo-dot-text");
+        } else {
+            word.getStyleClass().add("logo-word");
+            dot.getStyleClass().add("logo-dot");
+        }
+        HBox logo = new HBox(0, word, dot);
+        logo.setAlignment(Pos.BASELINE_LEFT);
+        if (small) logo.getStyleClass().add("logo-small");
+        return logo;
+    }
+
+    private static ToggleButton navButton(String text, ToggleGroup g) {
+        ToggleButton b = new ToggleButton(text.toUpperCase());
         b.setToggleGroup(g);
         b.getStyleClass().add("nav");
         return b;
-    }
-
-    /** Line icons on a 24x24 grid, drawn as vector paths. Colour and stroke come from the .icon CSS rules. */
-    private static final Map<String, String> ICON_PATHS = Map.ofEntries(
-            Map.entry("dashboard", "M4 4h6v7H4z M14 4h6v4h-6z M14 12h6v8h-6z M4 15h6v5H4z"),
-            Map.entry("processes", "M9 6h11 M9 12h11 M9 18h11 M4 6h.01 M4 12h.01 M4 18h.01"),
-            Map.entry("alerts", "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4l2-2z M10 21h4"),
-            Map.entry("settings", "M4 8h16 M4 16h16 M9 5v6 M15 13v6"),
-            Map.entry("cpu", "M7 7h10v10H7z M10 10h4v4h-4z M9 3v4 M15 3v4 M9 17v4 M15 17v4 M3 9h4 M3 15h4 M17 9h4 M17 15h4"),
-            Map.entry("memory", "M2 7h20v10H2z M6 11v2 M10 11v2 M14 11v2 M18 11v2 M5 17v3 M9 17v3 M15 17v3 M19 17v3"),
-            Map.entry("disk", "M3 14l3-8h12l3 8v5H3z M3 14h18 M7 17h.01 M11 17h4"),
-            Map.entry("battery", "M2 7h17v10H2z M21 10v4 M6 10v4 M10 10v4"),
-            Map.entry("warning", "M12 3L2 20h20z M12 10v4 M12 17h.01"),
-            Map.entry("close", "M6 6l12 12 M18 6L6 18"));
-
-    private static Node icon(String name, double size) {
-        SVGPath path = new SVGPath();
-        path.setContent(ICON_PATHS.get(name));
-        path.getStyleClass().add("icon");
-        path.setScaleX(size / 24.0);
-        path.setScaleY(size / 24.0);
-        return new Group(path);                 // the Group takes the scaled size into account when laying out
-    }
-
-    private static String iconFor(String metric) {
-        return switch (metric) {
-            case "CPU" -> "cpu";
-            case "MEMORY" -> "memory";
-            case "DISK" -> "disk";
-            default -> "battery";
-        };
     }
 
     private static ToggleButton sortButton(String text, ToggleGroup g) {

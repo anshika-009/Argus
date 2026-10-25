@@ -21,7 +21,7 @@ public class Sampler {
 
     /** battery is -1 when the machine has no battery. */
     public record Snapshot(double cpu, double mem, double disk, double battery,
-                           String memText, String diskText, String batText, long uptimeSecs) {}
+                           String memText, String diskText, String batText, long uptimeSecs, long memFreeBytes) {}
 
     /** startMillis = process creation time (epoch ms); used to detect recycled PIDs. */
     public record Proc(int pid, String name, double cpu, long memBytes, long startMillis) {}
@@ -59,9 +59,11 @@ public class Sampler {
 
         double m = -1;
         String memText = "N/A";
+        long memFree = -1;
         try {
             long total = mem.getTotal();
             long used = total - mem.getAvailable();
+            memFree = total - used;
             m = total == 0 ? 0 : used * 100.0 / total;
             memText = String.format("%.1f / %.1f GB", used / 1e9, total / 1e9);
         } catch (Exception e) {
@@ -97,7 +99,7 @@ public class Sampler {
         } catch (Exception e) {
             log("UPTIME", e);
         }
-        return new Snapshot(c, m, d, bat, memText, diskText, batText, uptime);
+        return new Snapshot(c, m, d, bat, memText, diskText, batText, uptime, memFree);
     }
 
 
@@ -163,6 +165,19 @@ public class Sampler {
                     cpu.getProcessorIdentifier().getName().trim(), cores, mem.getTotal() / 1e9);
         } catch (Exception e) {
             return "Argus";
+        }
+    }
+
+    /** CPU model and thread count only, e.g. "AMD Ryzen 5 7520U \u00b7 8 threads". */
+    public String cpuSummary() {
+        try {
+            String name = cpu.getProcessorIdentifier().getName().trim()
+                    .replaceAll("(?i)\\s+with\\s+.*$", "")          // drop "with Radeon Graphics"
+                    .replaceAll("(?i)\\((R|TM)\\)", "")
+                    .replaceAll("\\s+", " ");
+            return String.format("%s \u00b7 %d threads", name, cores);
+        } catch (Exception e) {
+            return "Processor";
         }
     }
 

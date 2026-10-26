@@ -12,7 +12,7 @@ Argus watches CPU, memory, disk and battery in real time, shows live graphs, ran
 
 - **Live graphs:** CPU, memory, disk and battery charts that update every second.
 - **Early warnings:** cards turn amber when a value gets high (70%+, or battery under 30%) and red when one of your alert rules fires. Graphs are filled area charts with a 0/50/100% scale. Each card carries a NORMAL / ELEVATED / ALERT tag, and a red banner appears across the top while an alert rule is firing.
-- **Rogue process list:** top processes ranked by CPU or memory, refreshed every 2 seconds, with a name filter. Heavy CPU users are highlighted.
+- **Rogue process list:** top processes ranked by CPU or memory (with PID), refreshed every 2 seconds, with a name filter. Heavy CPU users are highlighted, and the dashboard shows the heaviest process right now with its PID.
 - **Custom alerts:** set your own thresholds and durations. Alerts fire only after the limit has been breached continuously, so brief spikes don't cause spam. Triggers appear as desktop notifications and are saved to a log.
 - **Compact mode:** a small always-on-top widget with live bars. Choose which metrics it shows in the Settings tab.
 - **Safe process termination:** Argus asks for confirmation, then re-checks the process before ending it. It refuses Argus itself, critical Windows processes, system-account services and processes it has no permission to inspect, and it verifies the process start time so a recycled PID is never killed by mistake.
@@ -55,29 +55,54 @@ mvn javafx:run
 
 ## Project structure
 
+The code follows the architecture in the Softablitz abstract (class diagram): one package per responsibility.
+
 ```
 src/main/
 ├── java/org/tool/
-│   ├── Main.java          UI: dashboard, processes, alerts, compact mode, tray
-│   ├── Sampler.java       OSHI wrapper that builds immutable system snapshots
-│   ├── RingBuffer.java    Fixed-capacity circular buffer for graph history
-│   ├── AlertEngine.java   Breach-duration checks for alert rules
-│   ├── Db.java            SQLite storage for rules, logs and settings
-│   ├── ProcessGuard.java  Safety checks run before terminating a process
-│   └── Rule.java          Alert rule model
+│   ├── Main.java                        Entry point; launches ArgusApp
+│   ├── ArgusApp.java                    The application: creates and connects every component, owns the windows and the theme
+│   ├── model/                           Immutable data (records)
+│   │   ├── SystemSnapshot.java          One reading of CPU, memory, disk and battery
+│   │   ├── ProcessInfo.java             One running process (pid, name, cpu, memory, start time)
+│   │   ├── AlertRule.java               One alert rule
+│   │   └── AlertEvent.java              One entry of the event log
+│   ├── sampler/
+│   │   ├── MetricsSampler.java          Sampler thread: reads the sensors, builds snapshots, keeps the history
+│   │   └── RingBuffer.java              Fixed-capacity circular buffer for graph history
+│   ├── alert/
+│   │   ├── AlertEngine.java             Breach-duration checks; fires notifications and logs events
+│   │   └── NotificationService.java     Desktop notifications and the system-tray icon
+│   ├── process/
+│   │   ├── ProcessMonitor.java          Ranked process list, refreshed every 2 seconds
+│   │   ├── ProcessTerminator.java       Safety checks, then terminates
+│   │   └── ProtectedProcessPolicy.java  Processes that must never be terminated
+│   ├── storage/
+│   │   └── SettingsRepository.java      SQLite storage: rules, event log, settings
+│   └── ui/
+│       ├── DashboardController.java     Main window: dashboard, processes, alerts, settings
+│       ├── CompactController.java       Small always-on-top window
+│       └── Theme.java                   Shared stylesheet, night palette and logo
 └── resources/
-    ├── argus.css          Theme (dark and light)
-    ├── icons/             Pixel-art app icon, nav and card icons
-    └── fonts/             Press Start 2P (OFL)
+    ├── argus.css                        Theme (dark and light)
+    ├── icons/                           App icon (PNG, several sizes)
+    └── fonts/                           Space Grotesk Bold for the logo (OFL.txt = its license)
 ```
 
 ## How it works
 
-1. On startup Argus opens its SQLite database (`~/.argus/argus.db`) and loads the saved alert rules.
-2. A background **sampler thread** reads CPU, memory, disk and battery every second and produces an immutable snapshot.
-3. The **alert engine** counts how many seconds in a row each rule has been breached. When the count reaches the rule's duration, the alert fires once: it is logged, shown as a tray notification, and the matching card turns red.
-4. The sampler publishes each snapshot and appends it to a fixed-capacity **ring buffer** (the last 60 samples per metric), so memory use stays constant however long Argus runs. The **UI thread** renders only the newest snapshot once per frame and never queries the OS; if rendering lags, older frames are skipped.
-5. Every 2 seconds the process list is refreshed. Before terminating, Argus asks for confirmation and refuses protected processes.
+```
+MetricsSampler ──snapshots──▶ DashboardController, CompactController   (UI thread, once per frame)
+MetricsSampler ──checks─────▶ AlertEngine ──fires──▶ NotificationService
+                                         └──logs───▶ SettingsRepository
+ProcessMonitor ──lists──────▶ DashboardController ──kill──▶ ProcessTerminator ──checks──▶ ProtectedProcessPolicy
+```
+
+1. On startup `ArgusApp` opens the SQLite database (`~/.argus/argus.db`), loads the saved alert rules and settings, and builds both windows.
+2. The **sampler thread** (`MetricsSampler`, minimum priority) reads CPU, memory, disk and battery every second. Each sensor is read in its own try/catch, so a failing one shows "N/A" instead of stopping the pipeline. The result is an immutable `SystemSnapshot`, which is appended to a fixed-capacity **ring buffer** (the last 60 samples per metric) and passed to the `AlertEngine`.
+3. The **alert engine** counts how many seconds in a row each rule has been breached. When the count reaches the rule's duration the alert fires once: a desktop notification is shown, the event is saved, and the matching card turns red.
+4. The **UI thread** never queries the OS. Once per frame `ArgusApp` asks the sampler for the newest snapshot and hands it to the two controllers; if rendering lags, older snapshots are simply skipped.
+5. Every 2 seconds the `ProcessMonitor` (also minimum priority) refreshes the process list. When you terminate a process, the `ProcessTerminator` re-checks it (protected list, permission, same start time) before killing it, on a background thread.
 
 ## Data storage
 
@@ -90,5 +115,5 @@ Alert rules, trigger logs and settings are stored locally in `~/.argus/argus.db`
 
 ## Credits
 
-- Pixel font: [Press Start 2P](https://fonts.google.com/specimen/Press+Start+2P) by CodeMan38, SIL Open Font License 1.1 (`src/main/resources/fonts/OFL.txt`).
-- All icons are original pixel art made for this project in a blocky, voxel-game style. Argus is not affiliated with or endorsed by Mojang or Microsoft.
+- Logo typeface: [Space Grotesk](https://fonts.google.com/specimen/Space+Grotesk), SIL Open Font License 1.1 (`src/main/resources/fonts/OFL.txt`).
+- The app icon and logo are original artwork made for this project.

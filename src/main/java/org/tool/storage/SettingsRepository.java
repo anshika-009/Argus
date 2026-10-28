@@ -20,6 +20,9 @@ import java.util.List;
  * Rule changes are written in one transaction, so a crash can never leave a half-saved rule set.
  */
 public class SettingsRepository {
+    /** The event log keeps only the newest this-many entries; older ones are deleted (see {@link #pruneEvents}). */
+    public static final int MAX_LOG_EVENTS = 1000;
+
     private final String url;
 
     public SettingsRepository() throws SQLException {
@@ -42,6 +45,7 @@ public class SettingsRepository {
                         + "('CPU','>',90,10,1),('MEMORY','>',85,30,1),('DISK','>',90,60,0),('BATTERY','<',20,5,1)");
             }
         }
+        pruneEvents();                                   // trims a log left over from older versions of Argus
     }
 
     // ---------------------------------------------------------------- alert rules
@@ -96,8 +100,20 @@ public class SettingsRepository {
 
     // ---------------------------------------------------------------- event log
 
+    /** Adds one entry, then deletes the oldest ones so the log never holds more than {@link #MAX_LOG_EVENTS}. */
     public void saveEvent(AlertEvent event) {
         run("INSERT INTO logs(ts,message) VALUES (?,?)", event.timestamp(), event.message());
+        pruneEvents();
+    }
+
+    /**
+     * Keeps the newest {@link #MAX_LOG_EVENTS} log entries and deletes everything older. The subquery finds the
+     * id of the entry just outside the limit (the 1001st newest); with 1000 entries or fewer it returns nothing,
+     * so nothing is deleted. The database file does not shrink, but the freed space is reused, so its size stays
+     * bounded.
+     */
+    private void pruneEvents() {
+        run("DELETE FROM logs WHERE id <= (SELECT id FROM logs ORDER BY id DESC LIMIT 1 OFFSET ?)", MAX_LOG_EVENTS);
     }
 
     /** The newest events first. */

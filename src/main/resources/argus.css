@@ -51,39 +51,31 @@
 .dim { -fx-text-fill: -argus-dim; }
 
 /* small technical labels use the monospace face */
-.mono, .eyebrow, .tag, .tagline, .footer-label, .nav, .btn, .tab, .badge, .status {
+.mono, .eyebrow, .tag, .footer-label, .nav, .btn, .tab, .badge, .status {
     -fx-font-family: "Consolas"; -fx-font-size: 13px; -fx-font-weight: bold; }
 .eyebrow { -fx-font-size: 13px; -fx-text-fill: -argus-dim; }
 .footer-label { -fx-font-size: 12px; -fx-text-fill: -argus-faint; }
 
 /* ---------- header and logo ---------- */
 .header { -fx-padding: 0 24 0 0; -fx-alignment: center-left;
-    -fx-border-color: transparent transparent -argus-rule transparent; -fx-border-width: 0 0 2 0; }
-.root.night .header { -fx-border-width: 0 0 1 0; }
+    -fx-border-color: transparent transparent -argus-border-strong transparent; -fx-border-width: 0 0 2 0; }
 .logo-text { -fx-fill: -argus-text; -fx-stroke: transparent; }
 .logo-fake-bold { -fx-stroke: -argus-text; -fx-stroke-width: 1.6px; -fx-stroke-line-join: round; }
 .logo-dot-shape { -fx-fill: -argus-red; }
-.vrule { -fx-background-color: -argus-rule; }
-.tagline { -fx-text-fill: -argus-dim; -fx-padding: 0 24 0 24; }
 
 .nav { -fx-background-color: transparent; -fx-background-radius: 0; -fx-border-radius: 0;
     -fx-border-color: transparent transparent transparent transparent; -fx-border-width: 0 0 2 0;
     -fx-text-fill: -argus-text; -fx-padding: 8 4 6 4; -fx-cursor: hand; }
 .nav:hover { -fx-text-fill: -argus-dim; }
 .nav:selected { -fx-border-color: transparent transparent -argus-text transparent; -fx-text-fill: -argus-text; }
-.root.night .nav { -fx-text-fill: -argus-dim; -fx-border-width: 0; -fx-padding: 11 18 11 18; }
-.root.night .nav:hover { -fx-text-fill: -argus-text; }
-.root.night .nav:selected { -fx-background-color: -argus-invert-bg; -fx-text-fill: -argus-invert-fg; }
 
 /* ---------- status pill ---------- */
 .status { -fx-font-size: 12px; -fx-text-fill: -argus-dim; -fx-padding: 5 10 5 10; }
-.root.night .status { -fx-text-fill: -argus-ok; -fx-border-color: -argus-ok; -fx-border-width: 1; }
 
 /* ---------- buttons (square) ---------- */
 .btn { -fx-font-size: 13px; -fx-background-color: transparent; -fx-background-radius: 0; -fx-border-radius: 0;
     -fx-border-color: -argus-border-strong; -fx-border-width: 2; -fx-text-fill: -argus-text;
     -fx-padding: 10 18 10 18; -fx-cursor: hand; }
-.root.night .btn { -fx-border-width: 1; }
 .btn:hover { -fx-background-color: -argus-hover; }
 .btn-solid { -fx-background-color: -argus-invert-bg; -fx-border-color: -argus-invert-bg; -fx-text-fill: -argus-invert-fg; }
 .btn-solid:hover { -fx-background-color: -argus-invert-bg; -fx-opacity: 0.88; }

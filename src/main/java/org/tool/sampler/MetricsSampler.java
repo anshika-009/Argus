@@ -12,6 +12,9 @@ import oshi.hardware.PowerSource;
 import oshi.software.os.OperatingSystem;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,6 +25,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * The sampler thread. Once per second it reads CPU, memory, disk and battery through OSHI, builds an immutable
@@ -182,7 +188,7 @@ public class MetricsSampler {
         double bat = -1;
         String batText = "no battery detected";
         try {
-            String[] r = WINDOWS ? windowsBattery() : oshiBattery();
+            String[] r = batteryReading();
             if (r != null) {
                 bat = Double.parseDouble(r[0]);
                 batText = r[1];
@@ -201,7 +207,24 @@ public class MetricsSampler {
         return new SystemSnapshot(c, m, d, bat, System.currentTimeMillis(), memText, diskText, batText, uptime, memFree);
     }
 
-    private static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase().startsWith("windows");
+    private static final String OS_NAME = System.getProperty("os.name", "").toLowerCase();
+    private static final boolean WINDOWS = OS_NAME.startsWith("windows");
+    private static final boolean MAC = OS_NAME.startsWith("mac");
+    private static final boolean LINUX = OS_NAME.startsWith("linux");
+
+    /** One battery reading as {percent, text}, or null if there is no battery. Each OS asks its own source. */
+    private String[] batteryReading() throws Exception {
+        if (WINDOWS) return windowsBattery();
+        if (MAC || LINUX) {
+            try {
+                return MAC ? macBattery() : linuxBattery();
+            } catch (Exception e) {
+                log("BATTERY (native)", e);                // the native source failed: fall back to OSHI
+                return oshiBattery();
+            }
+        }
+        return oshiBattery();
+    }
 
     /** Windows SYSTEM_POWER_STATUS structure (declared here so we don't depend on a specific JNA release). */
     @Structure.FieldOrder({"ACLineStatus", "BatteryFlag", "BatteryLifePercent", "SystemStatusFlag",
@@ -240,7 +263,117 @@ public class MetricsSampler {
         return new String[]{String.valueOf(pct), text};
     }
 
-    /** Other operating systems: fall back to OSHI. */
+    // ---------------------------------------------------------------- Linux
+
+    /** Linux: reads /sys/class/power_supply. Returns null when the machine has no battery (e.g. a desktop PC). */
+    private static String[] linuxBattery() throws IOException {
+        Path base = Path.of("/sys/class/power_supply");
+        if (!Files.isDirectory(base)) return null;
+        Path bat;
+        try (Stream<Path> dirs = Files.list(base)) {
+            bat = dirs.sorted()
+                    .filter(d -> "Battery".equalsIgnoreCase(sysfs(d, "type")))
+                    .filter(d -> !"Device".equalsIgnoreCase(sysfs(d, "scope")))     // skip mouse / headset batteries
+                    .findFirst().orElse(null);
+        }
+        if (bat == null) return null;
+
+        double energyNow = sysfsNumber(bat, "energy_now");          // micro-watt-hours, or...
+        double energyFull = sysfsNumber(bat, "energy_full");
+        double rate = sysfsNumber(bat, "power_now");                // micro-watts
+        if (energyNow < 0 || energyFull <= 0) {                     // ...micro-amp-hours on some machines
+            energyNow = sysfsNumber(bat, "charge_now");
+            energyFull = sysfsNumber(bat, "charge_full");
+            rate = sysfsNumber(bat, "current_now");
+        }
+
+        double pct = sysfsNumber(bat, "capacity");
+        if (pct < 0 && energyNow >= 0 && energyFull > 0) pct = energyNow * 100.0 / energyFull;
+        if (pct < 0) return null;
+        pct = Math.min(pct, 100);
+
+        String status = String.valueOf(sysfs(bat, "status")).toLowerCase();
+        String text;
+        if (status.startsWith("charging")) {
+            text = "charging";
+        } else if (status.startsWith("discharging")) {
+            text = "on battery";
+            if (rate > 0 && energyNow > 0) {
+                long secs = (long) (energyNow / rate * 3600);
+                text += String.format(" \u00b7 %dh %02dm left", secs / 3600, (secs % 3600) / 60);
+            }
+        } else {
+            text = "plugged in";                                    // "Full", "Not charging" or unknown
+        }
+        return new String[]{String.valueOf(Math.round(pct)), text};
+    }
+
+    /** One sysfs file as trimmed text, or null if it does not exist or cannot be read. */
+    private static String sysfs(Path dir, String file) {
+        try {
+            return Files.readString(dir.resolve(file)).trim();
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** One sysfs file as a number, or -1 if it is missing or not a number. */
+    private static double sysfsNumber(Path dir, String file) {
+        String v = sysfs(dir, file);
+        if (v == null) return -1;
+        try {
+            return Double.parseDouble(v);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    // ---------------------------------------------------------------- macOS
+
+    private static final Pattern MAC_LEVEL = Pattern.compile("(\\d+)%;\\s*([^;\\n]+)");
+    private static final Pattern MAC_TIME = Pattern.compile("(\\d+):(\\d{2}) remaining");
+    private long macCheckedAt;                                      // used by the sampler thread only
+    private String[] macCached;
+
+    /** macOS: parses `pmset -g batt`. Asked at most every 5 seconds, because it starts a process each time. */
+    private String[] macBattery() throws Exception {
+        long now = System.currentTimeMillis();
+        if (macCheckedAt != 0 && now - macCheckedAt < 5000) return macCached;
+        macCheckedAt = now;
+
+        Process proc = new ProcessBuilder("pmset", "-g", "batt").redirectErrorStream(true).start();
+        if (!proc.waitFor(3, TimeUnit.SECONDS)) {
+            proc.destroyForcibly();
+            throw new IOException("pmset did not answer in time");
+        }
+        String out = new String(proc.getInputStream().readAllBytes());
+
+        Matcher level = MAC_LEVEL.matcher(out);
+        if (!level.find()) {                                        // no "NN%" line: a Mac without a battery
+            macCached = null;
+            return null;
+        }
+        String pct = level.group(1);
+        String state = level.group(2).trim().toLowerCase();
+        String text;
+        if (state.startsWith("discharging")) {
+            text = "on battery";
+            Matcher t = MAC_TIME.matcher(out);
+            if (t.find()) {
+                int h = Integer.parseInt(t.group(1));
+                int m = Integer.parseInt(t.group(2));
+                if (h > 0 || m > 0) text += String.format(" \u00b7 %dh %02dm left", h, m);
+            }
+        } else if (state.startsWith("charging") || state.startsWith("finishing charge")) {
+            text = "charging";
+        } else {
+            text = "plugged in";                                    // "charged", "AC attached", "not charging"
+        }
+        macCached = new String[]{pct, text};
+        return macCached;
+    }
+
+    /** Fallback for any other situation: OSHI. */
     private String[] oshiBattery() {
         List<PowerSource> sources = si.getHardware().getPowerSources();
         if (sources.isEmpty()) return null;

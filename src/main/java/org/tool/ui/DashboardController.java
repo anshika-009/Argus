@@ -3,6 +3,9 @@ package org.tool.ui;
 import javafx.animation.Animation;
 import javafx.animation.FadeTransition;
 import javafx.application.Platform;
+import javafx.beans.binding.Bindings;
+import javafx.beans.property.DoubleProperty;
+import javafx.beans.property.SimpleDoubleProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.css.PseudoClass;
 import javafx.geometry.Insets;
@@ -111,8 +114,9 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
     private HBox banner;
     private Label bannerText;
     private Label bannerChip;
-    private Region logoRule;
-    private Label tagline;
+    private static final double RULE_ROW_H = 38;        // matches -fx-cell-size in argus.css
+    private static final int MAX_RULE_ROWS = 7;         // beyond this the rules table scrolls
+    private final DoubleProperty ruleHeaderH = new SimpleDoubleProperty(32);
     private final Map<String, Integer> elevatedSecs = new LinkedHashMap<>();   // consecutive samples each metric has been high
     private String bannerKey = "";
     private String bannerDismissedKey = "";
@@ -163,14 +167,7 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
         keepOneSelected(nav);
 
         HBox logo = Theme.buildLogo(false);
-        logo.setPadding(new Insets(0, 28, 0, 24));
-        logoRule = new Region();
-        logoRule.getStyleClass().add("vrule");
-        logoRule.setMinWidth(1);
-        logoRule.setPrefWidth(1);
-        logoRule.setMaxWidth(1);
-        tagline = new Label("SYSTEM MONITOR");
-        tagline.getStyleClass().add("tagline");
+        logo.setPadding(new Insets(12, 28, 0, 24));      // top padding nudges the logo lower in the header
         Label status = new Label("\u25CF LIVE \u00b7 1S");
         status.getStyleClass().add("status");
         FadeTransition pulse = new FadeTransition(Duration.seconds(1), status);
@@ -191,7 +188,7 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
         navBox.setAlignment(Pos.CENTER_LEFT);
         HBox right = new HBox(12, status, themeBtn, compactBtn);
         right.setAlignment(Pos.CENTER_RIGHT);
-        HBox header = new HBox(logo, logoRule, tagline, navBox, spacer, right);
+        HBox header = new HBox(logo, navBox, spacer, right);
         HBox.setMargin(navBox, new Insets(0, 0, 0, 4));
         header.getStyleClass().add("header");
         header.setAlignment(Pos.CENTER_LEFT);
@@ -268,10 +265,6 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
         this.night = night;
         Theme.setNight(root, night);
         themeBtn.setText(night ? "LIGHT MODE" : "DARK MODE");
-        for (Node n : new Node[]{logoRule, tagline}) {      // the dark header has a divider and a tagline; the light one does not
-            n.setVisible(night);
-            n.setManaged(night);
-        }
     }
 
     private void styleDialog(Alert a) {
@@ -760,7 +753,22 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
         });
         ruleTable.getColumns().add(enabledCol);
         ruleTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        ruleTable.setPrefHeight(200);
+        ruleTable.setPlaceholder(new Label("No rules yet"));
+        ruleTable.setFixedCellSize(RULE_ROW_H);
+        // Height = header + one row per rule (min 1 row, max MAX_RULE_ROWS), so every rule is visible without scrolling.
+        ruleTable.prefHeightProperty().bind(Bindings.createDoubleBinding(
+                () -> Math.min(Math.max(ruleTable.getItems().size(), 1), MAX_RULE_ROWS) * RULE_ROW_H
+                        + ruleHeaderH.get() + 2,
+                ruleTable.getItems(), ruleHeaderH));
+        ruleTable.minHeightProperty().bind(ruleTable.prefHeightProperty());
+        ruleTable.maxHeightProperty().bind(ruleTable.prefHeightProperty());
+        ruleTable.skinProperty().addListener((o, a, b) -> Platform.runLater(() -> {   // measure the real header height
+            Node h = ruleTable.lookup(".column-header-background");
+            if (h instanceof Region r) {
+                if (r.getHeight() > 0) ruleHeaderH.set(r.getHeight());
+                r.heightProperty().addListener((oo, x, n) -> { if (n.doubleValue() > 0) ruleHeaderH.set(n.doubleValue()); });
+            }
+        }));
 
         ComboBox<String> metric = new ComboBox<>();
         metric.getItems().addAll(METRICS);

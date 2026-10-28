@@ -11,15 +11,22 @@ import oshi.hardware.GlobalMemory;
 import oshi.hardware.PowerSource;
 import oshi.software.os.OperatingSystem;
 
-import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -53,7 +60,8 @@ public class MetricsSampler {
     private final GlobalMemory mem = si.getHardware().getMemory();
     private final OperatingSystem os = si.getOperatingSystem();
     private final int cores = cpu.getLogicalProcessorCount();
-    private final File root = pickRoot();
+    private final FileStore diskStore = pickStore();
+    private final String diskLabel = diskLabel();
     private long[] prevTicks = cpu.getSystemCpuLoadTicks();
 
     private final Map<String, RingBuffer> history = new LinkedHashMap<>();   // filled once, never modified afterwards
@@ -140,12 +148,37 @@ public class MetricsSampler {
 
     // ---------------------------------------------------------------- sensors
 
-    private static File pickRoot() {
-        File[] roots = File.listRoots();
-        for (File f : roots) {
-            if (f.getPath().toUpperCase().startsWith("C:")) return f;
+    /**
+     * The volume that holds the user's home folder: the disk the user actually fills up. On Windows that is the
+     * profile drive, on macOS the Data volume, on Linux the partition behind /home (which may not be "/").
+     * Falls back to the first filesystem root if the home folder cannot be resolved.
+     */
+    private static FileStore pickStore() {
+        try {
+            Path home = Path.of(System.getProperty("user.home", ""));
+            if (Files.exists(home)) return Files.getFileStore(home);
+        } catch (Exception ignored) {
+            // fall through to the roots
         }
-        return roots[0];
+        try {
+            for (Path r : java.nio.file.FileSystems.getDefault().getRootDirectories()) return Files.getFileStore(r);
+        } catch (Exception ignored) {
+            // no usable store: the DISK sensor will report N/A
+        }
+        return null;
+    }
+
+    /** "C:" on Windows; "Home" elsewhere (the volume is chosen by home folder, so a mount path would mislead). */
+    private static String diskLabel() {
+        if (WINDOWS) {
+            try {
+                Path root = Path.of(System.getProperty("user.home", "")).getRoot();
+                if (root != null) return root.toString().replace("\\", "");
+            } catch (Exception ignored) {
+                // use the generic label
+            }
+        }
+        return "Home";
     }
 
     /**
@@ -177,10 +210,14 @@ public class MetricsSampler {
         double d = -1;
         String diskText = "N/A";
         try {
-            long dTotal = root.getTotalSpace();
-            long dFree = root.getUsableSpace();
-            d = dTotal == 0 ? 0 : (dTotal - dFree) * 100.0 / dTotal;
-            diskText = String.format("%s  %.0f GB free of %.0f GB", root.getPath(), dFree / 1e9, dTotal / 1e9);
+            if (diskStore == null) throw new IOException("no file store for the home folder");
+            long dTotal = diskStore.getTotalSpace();
+            long dFreeAll = diskStore.getUnallocatedSpace();    // f_bfree: includes blocks reserved for root
+            long dAvail = diskStore.getUsableSpace();           // f_bavail: what a normal user can still write
+            long dUsed = dTotal - dFreeAll;
+            long dDenom = dUsed + dAvail;                       // same formula as `df`: reserved blocks are not "used"
+            d = dDenom <= 0 ? 0 : dUsed * 100.0 / dDenom;
+            diskText = String.format("%s  %.0f GB free of %.0f GB", diskLabel, dAvail / 1e9, dTotal / 1e9);
         } catch (Exception e) {
             log("DISK", e);
         }
@@ -265,46 +302,96 @@ public class MetricsSampler {
 
     // ---------------------------------------------------------------- Linux
 
-    /** Linux: reads /sys/class/power_supply. Returns null when the machine has no battery (e.g. a desktop PC). */
-    private static String[] linuxBattery() throws IOException {
+    private final Deque<Double> linuxRates = new ArrayDeque<>();   // recent discharge rates, sampler thread only
+    private static final int RATE_WINDOW = 30;                     // seconds averaged for the time-left estimate
+
+    /**
+     * Linux: reads /sys/class/power_supply. Returns null when the machine has no battery (e.g. a desktop PC).
+     * All internal batteries are added together (some laptops have two), mains/USB-C adapters decide "plugged in"
+     * when the battery status is vague, and the time-left estimate uses a 30 s average because power_now jumps.
+     */
+    private String[] linuxBattery() throws IOException {
         Path base = Path.of("/sys/class/power_supply");
         if (!Files.isDirectory(base)) return null;
-        Path bat;
+
+        List<Path> bats = new ArrayList<>();
+        boolean haveAcInfo = false, acOnline = false;
         try (Stream<Path> dirs = Files.list(base)) {
-            bat = dirs.sorted()
-                    .filter(d -> "Battery".equalsIgnoreCase(sysfs(d, "type")))
-                    .filter(d -> !"Device".equalsIgnoreCase(sysfs(d, "scope")))     // skip mouse / headset batteries
-                    .findFirst().orElse(null);
+            for (Path d : dirs.sorted().toList()) {
+                String type = sysfs(d, "type");
+                if (type == null || "Device".equalsIgnoreCase(sysfs(d, "scope"))) continue;   // skip mouse / headset
+                if ("Battery".equalsIgnoreCase(type)) {
+                    if (!"0".equals(sysfs(d, "present"))) bats.add(d);                      // 0 = empty bay
+                } else if (!"UPS".equalsIgnoreCase(type)) {                                   // Mains, USB, USB_C, ...
+                    String online = sysfs(d, "online");
+                    if (online != null) {
+                        haveAcInfo = true;
+                        if (online.equals("1")) acOnline = true;
+                    }
+                }
+            }
         }
-        if (bat == null) return null;
+        if (bats.isEmpty()) return null;
 
-        double energyNow = sysfsNumber(bat, "energy_now");          // micro-watt-hours, or...
-        double energyFull = sysfsNumber(bat, "energy_full");
-        double rate = sysfsNumber(bat, "power_now");                // micro-watts
-        if (energyNow < 0 || energyFull <= 0) {                     // ...micro-amp-hours on some machines
-            energyNow = sysfsNumber(bat, "charge_now");
-            energyFull = sysfsNumber(bat, "charge_full");
-            rate = sysfsNumber(bat, "current_now");
+        double now = 0, full = 0, rate = 0, capSum = 0;
+        int capCount = 0;
+        boolean unitsOk = true;
+        String unit = null;
+        boolean charging = false, discharging = false;
+        for (Path bat : bats) {
+            String u = "energy";                                    // micro-watt-hours / micro-watts, or...
+            double n = sysfsNumber(bat, "energy_now");
+            double f = sysfsNumber(bat, "energy_full");
+            double r = sysfsNumber(bat, "power_now");
+            if (n < 0 || f <= 0) {                                  // ...micro-amp-hours / micro-amps on some machines
+                u = "charge";
+                n = sysfsNumber(bat, "charge_now");
+                f = sysfsNumber(bat, "charge_full");
+                r = sysfsNumber(bat, "current_now");
+            }
+            if (n >= 0 && f > 0) {
+                if (unit == null) unit = u;
+                else if (!unit.equals(u)) unitsOk = false;          // can't add Wh to Ah
+                now += n;
+                full += f;
+                if (r > 0) rate += r;
+            } else {
+                unitsOk = false;
+            }
+            double c = sysfsNumber(bat, "capacity");
+            if (c >= 0) {
+                capSum += c;
+                capCount++;
+            }
+            String st = String.valueOf(sysfs(bat, "status")).toLowerCase();
+            if (st.startsWith("charging")) charging = true;
+            else if (st.startsWith("discharging")) discharging = true;
         }
 
-        double pct = sysfsNumber(bat, "capacity");
-        if (pct < 0 && energyNow >= 0 && energyFull > 0) pct = energyNow * 100.0 / energyFull;
-        if (pct < 0) return null;
-        pct = Math.min(pct, 100);
+        double pct;
+        if (bats.size() == 1 && capCount == 1) pct = capSum;       // the kernel's own number, like the desktop shows
+        else if (unitsOk && full > 0) pct = now * 100.0 / full;
+        else if (capCount > 0) pct = capSum / capCount;
+        else return null;
+        pct = Math.min(Math.max(pct, 0), 100);
 
-        String status = String.valueOf(sysfs(bat, "status")).toLowerCase();
+        boolean onBattery = !charging && (discharging || (haveAcInfo && !acOnline));
         String text;
-        if (status.startsWith("charging")) {
+        if (charging) {
             text = "charging";
-        } else if (status.startsWith("discharging")) {
+        } else if (onBattery) {
             text = "on battery";
-            if (rate > 0 && energyNow > 0) {
-                long secs = (long) (energyNow / rate * 3600);
+            if (unitsOk && rate > 0 && now > 0) {
+                linuxRates.addLast(rate);
+                if (linuxRates.size() > RATE_WINDOW) linuxRates.removeFirst();
+                double avg = linuxRates.stream().mapToDouble(Double::doubleValue).average().orElse(rate);
+                long secs = (long) (now / avg * 3600);
                 text += String.format(" \u00b7 %dh %02dm left", secs / 3600, (secs % 3600) / 60);
             }
         } else {
-            text = "plugged in";                                    // "Full", "Not charging" or unknown
+            text = "plugged in";                                    // "Full", "Not charging" (charge limit), AC online
         }
+        if (!onBattery) linuxRates.clear();
         return new String[]{String.valueOf(Math.round(pct)), text};
     }
 
@@ -332,21 +419,39 @@ public class MetricsSampler {
 
     private static final Pattern MAC_LEVEL = Pattern.compile("(\\d+)%;\\s*([^;\\n]+)");
     private static final Pattern MAC_TIME = Pattern.compile("(\\d+):(\\d{2}) remaining");
-    private long macCheckedAt;                                      // used by the sampler thread only
+    private long macCheckedAt;                                      // last successful read; sampler thread only
+    private long macFailedAt;                                       // last failed read; 0 = none
     private String[] macCached;
 
-    /** macOS: parses `pmset -g batt`. Asked at most every 5 seconds, because it starts a process each time. */
+    /**
+     * macOS: parses `pmset -g batt`. Asked at most every 5 seconds, because it starts a process each time.
+     * A failed run is not cached as an answer: the caller falls back to OSHI, and pmset is retried after 30 s.
+     */
     private String[] macBattery() throws Exception {
         long now = System.currentTimeMillis();
         if (macCheckedAt != 0 && now - macCheckedAt < 5000) return macCached;
-        macCheckedAt = now;
+        if (macFailedAt != 0 && now - macFailedAt < 30_000) throw new IOException("pmset failed recently, using OSHI");
 
-        Process proc = new ProcessBuilder("pmset", "-g", "batt").redirectErrorStream(true).start();
-        if (!proc.waitFor(3, TimeUnit.SECONDS)) {
-            proc.destroyForcibly();
-            throw new IOException("pmset did not answer in time");
+        String out;
+        Process proc = null;
+        try {
+            proc = new ProcessBuilder("/usr/bin/pmset", "-g", "batt").redirectErrorStream(true).start();
+            InputStream in = proc.getInputStream();
+            out = CompletableFuture.supplyAsync(() -> {             // read while waiting, so a full pipe cannot block it
+                try {
+                    return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }).get(3, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            macFailedAt = now;
+            throw e;
+        } finally {
+            if (proc != null && proc.isAlive()) proc.destroyForcibly();
         }
-        String out = new String(proc.getInputStream().readAllBytes());
+        macFailedAt = 0;
+        macCheckedAt = now;
 
         Matcher level = MAC_LEVEL.matcher(out);
         if (!level.find()) {                                        // no "NN%" line: a Mac without a battery

@@ -17,6 +17,7 @@ import javafx.scene.chart.NumberAxis;
 import javafx.scene.chart.XYChart;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
@@ -126,6 +127,7 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
 
     private final Map<String, MetricCard> cards = new LinkedHashMap<>();
     private final TableView<ProcessInfo> procTable = new TableView<>();
+    private Button killButton;             // the TERMINATE button; disabled while a process is being stopped
     private final TableView<AlertRule> ruleTable = new TableView<>();
     private final ListView<String> logView = new ListView<>();
     private boolean sortByCpu = true;
@@ -572,6 +574,7 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
         Button kill = new Button("TERMINATE");
         kill.getStyleClass().addAll("btn", "btn-danger");
         kill.setOnAction(e -> onKillClicked());
+        killButton = kill;
         Region sp = new Region();
         HBox.setHgrow(sp, Priority.ALWAYS);
         Label sortLbl = new Label("SORT BY");
@@ -590,6 +593,10 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
         for (TableColumn<ProcessInfo, String> c : List.of(pidCol, cpuCol, memCol)) {
             c.setStyle("-fx-alignment: CENTER-RIGHT;");
         }
+        // The cells are right-aligned, so the headers of those columns must be too, or each title floats
+        // away from its numbers. Header nodes only exist once the table has a skin.
+        procTable.skinProperty().addListener((o, a, b) -> Platform.runLater(
+                () -> rightAlignHeaders(procTable, Set.of("PID", "CPU", "MEMORY"))));
         cpuCol.setCellFactory(c -> new TableCell<>() {         // heavy CPU users are shown in the warning colour
             @Override
             protected void updateItem(String text, boolean empty) {
@@ -685,6 +692,8 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
         }
     }
 
+    private static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase().startsWith("windows");
+
     /** The Terminate button: safety checks, confirmation, then the kill on a background thread. */
     public void onKillClicked() {
         ProcessInfo p = procTable.getSelectionModel().getSelectedItem();
@@ -700,14 +709,27 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
             return;
         }
 
-        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION,
-                p.name() + " (PID " + p.pid() + ")\nUnsaved data in this app will be lost.",
-                ButtonType.CANCEL, ButtonType.OK);
+        // Windows ends a process at once. Linux and macOS ask it to close first and only then force it, so offer
+        // a "Force kill" choice there for programs the user already knows are stuck.
+        ButtonType forceKill = new ButtonType("Force kill", ButtonBar.ButtonData.OTHER);
+        String who = p.name() + " (PID " + p.pid() + ")\n";
+        Alert confirm;
+        if (WINDOWS) {
+            confirm = new Alert(Alert.AlertType.CONFIRMATION,
+                    who + "Unsaved data in this app will be lost.", ButtonType.CANCEL, ButtonType.OK);
+        } else {
+            confirm = new Alert(Alert.AlertType.CONFIRMATION,
+                    who + "Argus asks the app to close first, and force-closes it if it is still running after "
+                            + ProcessTerminator.GRACE_SECONDS + " seconds.\nUnsaved data in this app may be lost.\n\n"
+                            + "\"Force kill\" skips the wait and ends it immediately.",
+                    ButtonType.CANCEL, ButtonType.OK, forceKill);
+        }
         confirm.setTitle("Terminate process?");
         confirm.setHeaderText("TERMINATE PROCESS?");
         styleDialog(confirm);
         Optional<ButtonType> answer = confirm.showAndWait();
-        if (answer.isEmpty() || answer.get() != ButtonType.OK) return;
+        if (answer.isEmpty() || answer.get() == ButtonType.CANCEL) return;
+        boolean force = answer.get() == forceKill;
 
         // Re-check: the process may have exited (and its PID been reused) while the dialog was open.
         ProcessTerminator.Verdict verdict = terminator.check(p);
@@ -716,20 +738,36 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
             return;
         }
 
-        // Kill and wait on a background thread so the UI never freezes.
+        // Kill and wait on a background thread so the UI never freezes. The button shows "STOPPING..." meanwhile
+        // (a graceful stop can take several seconds) and cannot be pressed twice.
+        setKillBusy(true);
         Thread worker = new Thread(() -> {
-            ProcessTerminator.Result result = terminator.terminate(p);
+            ProcessTerminator.Result result;
+            try {
+                result = terminator.terminate(p, force);
+            } catch (RuntimeException e) {
+                result = new ProcessTerminator.Result(false, "Could not terminate " + p.name() + ": " + e.getMessage());
+            }
+            ProcessTerminator.Result done = result;
             Platform.runLater(() -> {
-                if (result.success()) {
-                    repository.saveEvent(AlertEvent.now("Terminated " + p.name() + " (PID " + p.pid() + ")"));
+                setKillBusy(false);
+                if (done.success()) {
+                    repository.saveEvent(AlertEvent.now((force ? "Force-killed " : "Terminated ")
+                            + p.name() + " (PID " + p.pid() + ")"));
                     refreshEvents();
                 } else {
-                    info(result.message(), Alert.AlertType.ERROR);
+                    info(done.message(), Alert.AlertType.ERROR);
                 }
             });
         }, "argus-terminate");
         worker.setDaemon(true);
         worker.start();
+    }
+
+    private void setKillBusy(boolean busy) {
+        if (killButton == null) return;
+        killButton.setDisable(busy);
+        killButton.setText(busy ? "STOPPING..." : "TERMINATE");
     }
 
     // ---------------------------------------------------------------- alerts
@@ -937,6 +975,15 @@ public class DashboardController implements MetricsSampler.SnapshotListener {
         g.selectedToggleProperty().addListener((o, oldT, newT) -> {
             if (newT == null && oldT != null) oldT.setSelected(true);
         });
+    }
+
+    /** Right-aligns the header text of the named columns, to sit over right-aligned cells. */
+    private static void rightAlignHeaders(TableView<?> table, Set<String> titles) {
+        for (Node header : table.lookupAll(".column-header")) {
+            if (header.lookup(".label") instanceof Label title && titles.contains(title.getText())) {
+                title.setStyle("-fx-alignment: CENTER-RIGHT;");
+            }
+        }
     }
 
     private static <T> TableColumn<T, String> col(String title, Function<T, String> f, double width) {

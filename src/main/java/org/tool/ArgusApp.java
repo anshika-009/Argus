@@ -30,12 +30,6 @@ import static org.tool.sampler.MetricsSampler.METRICS;
 /**
  * Argus - lightweight system monitor. The application object: it creates every component, connects them,
  * starts the background threads and owns the two windows (main and compact) and the theme.
- *
- * <pre>
- *   MetricsSampler --snapshots--> DashboardController, CompactController (UI thread, once per frame)
- *   MetricsSampler --checks-----> AlertEngine --fires--> NotificationService, logs --> SettingsRepository
- *   ProcessMonitor --lists------> DashboardController --kill--> ProcessTerminator --checks--> ProtectedProcessPolicy
- * </pre>
  */
 public class ArgusApp extends Application implements DashboardController.Host {
 
